@@ -2,10 +2,10 @@
 // ---------- 狀態 ----------
 const S = {
   data: null, etag: null, config: null,
-  range: '7d', metric: 'tokens', project: '', model: '', source: '',
+  range: '7d', metric: 'tokens', project: '', model: '', source: '', device: '',
   tab: 'overview', session: null, sessSort: { key: 'last', dir: -1 },
 };
-const R = { ts: 0, session: 1, project: 2, model: 3, input: 4, output: 5, cw: 6, cr: 7, cost: 8, scen: 9, sub: 10, prompt: 11, thinking: 12, tools: 13 };
+const R = { ts: 0, session: 1, project: 2, model: 3, input: 4, output: 5, cw: 6, cr: 7, cost: 8, scen: 9, sub: 10, prompt: 11, thinking: 12, tools: 13, device: 14 };
 const TYPES = [
   { key: 'input', idx: R.input, label: '輸入', slot: 1 },
   { key: 'output', idx: R.output, label: '輸出', slot: 2 },
@@ -40,7 +40,8 @@ function rangeStart() {
 function dimFilter(r) {
   return (S.project === '' || r[R.project] === +S.project) &&
     (S.model === '' || r[R.model] === +S.model) &&
-    (S.source === '' || r[R.sub] === +S.source);
+    (S.source === '' || r[R.sub] === +S.source) &&
+    (S.device === '' || r[R.device] === +S.device);
 }
 function filtered() {
   const t0 = rangeStart();
@@ -181,6 +182,7 @@ function renderOverview(rows) {
   draw('cWindow', { type: 'line', data: { labels, datasets: winSets }, options: baseOpts({ fmt: fmtTok }) });
 
   renderHeatmap(rows);
+  renderDeviceChart(rows);
 
   // 專案排行（前 7 + 其他）
   const pv = {};
@@ -196,6 +198,22 @@ function renderOverview(rows) {
       scales: { x: { ...baseOpts().scales.y }, y: { grid: { display: false }, ticks: { color: css('--text-2') } } } },
   });
 }
+
+function renderDeviceChart(rows) {
+  const devs = S.data.devices;
+  $('#deviceCard').hidden = devs.length < 2;
+  if (devs.length < 2) return;
+  const v = devs.map(() => 0);
+  rows.forEach(r => { v[r[R.device]] += val(r); });
+  $('#deviceNote').textContent = `${devs.length} 台裝置`;
+  draw('cDevices', {
+    type: 'bar',
+    data: { labels: devs.map(deviceLabel), datasets: [{ ...barDs(S.metric === 'cost' ? '花費' : 'Token', v, devs.map((d, i) => slot((i % 8) + 1))), borderRadius: { topRight: 4, bottomRight: 4 } }] },
+    options: { ...baseOpts(), indexAxis: 'y', interaction: { mode: 'nearest', axis: 'y', intersect: false },
+      scales: { x: { ...baseOpts().scales.y }, y: { grid: { display: false }, ticks: { color: css('--text-2') } } } },
+  });
+}
+const deviceLabel = d => d.name + (d.local ? '（本機）' : '');
 
 function renderHeatmap(rows) {
   const grid = Array.from({ length: 7 }, () => Array(24).fill(0));
@@ -291,14 +309,15 @@ function renderSessions(rows) {
   const list = sessionStats(rows).map(s => ({
     ...s, title: S.data.sessions[s.si].title || S.data.prompts[s.firstPrompt] || S.data.sessions[s.si].id.slice(0, 8),
     project: S.data.projects[S.data.sessions[s.si].project],
+    device: S.data.devices[S.data.sessions[s.si].device]?.name || '',
   })).filter(s => !q || s.title.toLowerCase().includes(q) || s.project.toLowerCase().includes(q));
   const { key, dir } = S.sessSort;
   list.sort((a, b) => (typeof a[key] === 'string' ? a[key].localeCompare(b[key]) : a[key] - b[key]) * dir);
-  const cols = [['title', '標題'], ['project', '專案'], ['first', '開始'], ['last', '最後活動'], ['calls', '呼叫', 1], ['tok', 'Token', 1], ['cost', '花費', 1], ['maxCtx', '最大上下文', 1]];
+  const cols = [['title', '標題'], ['project', '專案'], ['device', '裝置'], ['first', '開始'], ['last', '最後活動'], ['calls', '呼叫', 1], ['tok', 'Token', 1], ['cost', '花費', 1], ['maxCtx', '最大上下文', 1]];
   const ctxLimit = S.config ? S.config.thresholds.contextTokens : 0;
   $('#sessTable').innerHTML = `<thead><tr>${cols.map(([k, l, n]) => `<th data-k="${k}" class="${n ? 'num' : ''}">${l}${k === key ? (dir > 0 ? ' ▲' : ' ▼') : ''}</th>`).join('')}</tr></thead><tbody>` +
     list.map(s => `<tr data-si="${s.si}" class="${s.si === S.session ? 'sel' : ''}">
-      <td class="wrap">${esc(s.title.slice(0, 80))}</td><td>${esc(s.project)}</td><td>${fmtTime(s.first)}</td><td>${fmtTime(s.last)}</td>
+      <td class="wrap">${esc(s.title.slice(0, 80))}</td><td>${esc(s.project)}</td><td>${esc(s.device)}</td><td>${fmtTime(s.first)}</td><td>${fmtTime(s.last)}</td>
       <td class="num">${s.calls}</td><td class="num">${fmtTok(s.tok)}</td><td class="num">${fmtUSD(s.cost)}</td>
       <td class="num">${ctxLimit && s.maxCtx >= ctxLimit ? '⚠ ' : ''}${fmtTok(s.maxCtx)}</td></tr>`).join('') + '</tbody>';
   if (S.session != null) renderSessionDetail();
@@ -376,7 +395,20 @@ function dismissAlerts() {
 }
 
 // ---------- 設定 ----------
+function renderDevices() {
+  const now = Date.now();
+  const ago = ts => { const m = Math.round((now - ts) / 6e4); return m < 1 ? '剛剛' : m < 60 ? `${m} 分鐘前` : m < 1440 ? `${Math.round(m / 60)} 小時前` : `${Math.round(m / 1440)} 天前`; };
+  $('#deviceTable').innerHTML = '<thead><tr><th>裝置</th><th>最後更新</th><th class="num">呼叫數</th></tr></thead><tbody>' +
+    S.data.devices.map(d => `<tr><td>${esc(d.name)}${d.local ? '<span class="tag">本機</span>' : ''}</td><td>${d.local ? '即時' : ago(d.updatedAt)}</td><td class="num">${d.calls.toLocaleString()}</td></tr>`).join('') + '</tbody>';
+}
 function fillConfig() {
+  const sf = $('#syncForm');
+  sf.elements.deviceName.value = S.config.deviceName || '';
+  sf.elements.deviceName.placeholder = S.config.deviceNameResolved;
+  sf.elements.syncDir.value = S.config.syncDir || '';
+  $('#useOneDrive').hidden = !S.config.detectedOneDrive || S.config.syncDir === S.config.detectedOneDrive;
+  $('#syncMsg').textContent = S.config.syncError || (S.config.syncDir ? '同步中：' + S.config.syncDir : '目前未同步，只顯示這台電腦的用量');
+
   const f = $('#thForm');
   for (const [k, v] of Object.entries(S.config.thresholds)) if (f.elements[k]) f.elements[k].value = v;
   f.elements.windowsToast.checked = !!S.config.windowsToast;
@@ -411,6 +443,8 @@ async function load() {
       S.data = await res.json();
       fillSelect('#fProject', S.data.projects, S.project);
       fillSelect('#fModel', S.data.models, S.model);
+      fillSelect('#fDevice', S.data.devices.map(deviceLabel), S.device);
+      renderDevices();
       render();
     }
     $('#status').textContent = `${S.data.rows.length.toLocaleString()} 次 API 呼叫・更新於 ${fmtTime(Date.now())}`;
@@ -429,7 +463,7 @@ function bindSeg(id, key) {
 }
 bindSeg('#range', 'range');
 bindSeg('#metric', 'metric');
-[['#fProject', 'project'], ['#fModel', 'model'], ['#fSource', 'source']].forEach(([id, k]) => $(id).addEventListener('change', e => { S[k] = e.target.value; render(); }));
+[['#fProject', 'project'], ['#fModel', 'model'], ['#fSource', 'source'], ['#fDevice', 'device']].forEach(([id, k]) => $(id).addEventListener('change', e => { S[k] = e.target.value; render(); }));
 document.querySelector('.tabs').addEventListener('click', e => {
   const b = e.target.closest('.tab'); if (!b) return;
   S.tab = b.dataset.tab;
@@ -453,6 +487,11 @@ $('#thForm').addEventListener('submit', e => {
   for (const k of Object.keys(S.config.thresholds)) th[k] = +f.elements[k].value || 0;
   saveConfig({ thresholds: th, windowsToast: f.elements.windowsToast.checked }, '#thMsg');
 });
+$('#syncForm').addEventListener('submit', e => {
+  e.preventDefault();
+  saveConfig({ deviceName: e.target.elements.deviceName.value, syncDir: e.target.elements.syncDir.value }, '#syncMsg');
+});
+$('#useOneDrive').addEventListener('click', () => { $('#syncForm').elements.syncDir.value = S.config.detectedOneDrive; });
 $('#savePricing').addEventListener('click', () => {
   let p; try { p = JSON.parse($('#pricing').value); } catch (e) { $('#prMsg').textContent = 'JSON 格式錯誤：' + e.message; return; }
   saveConfig({ pricing: p }, '#prMsg');

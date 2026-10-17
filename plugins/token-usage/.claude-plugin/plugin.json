@@ -1,6 +1,6 @@
 {
   "name": "token-usage",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Claude Code token 用量儀表板：用量細項、session 用量、各情境消耗、多種圖表與用量門檻通知",
   "author": { "name": "CMUH ITAI" },
   "keywords": ["token", "usage", "cost", "dashboard", "monitoring"]

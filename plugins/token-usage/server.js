@@ -19,6 +19,8 @@ const DEFAULT_CONFIG = {
   projectsDir: path.join(process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude'), 'projects'),
   refreshSeconds: 30,
   windowsToast: true,
+  syncDir: '',            // 多裝置同步資料夾（例如 OneDrive 內的資料夾），空白代表不同步
+  deviceName: '',         // 顯示用的裝置名稱，空白時用電腦名稱
   // 美元 / 百萬 token（估算值，可自行修改）。key 為模型名稱中包含的字串，依序比對。
   pricing: {
     opus: { input: 5, output: 25 },
@@ -116,6 +118,7 @@ function parseFile(file) {
         const cw = u.cache_creation_input_tokens || 0;
         const cw1h = cc.ephemeral_1h_input_tokens || 0;
         c = {
+          key,
           ts: Date.parse(o.timestamp) || 0,
           session: o.sessionId || path.basename(file, '.jsonl'),
           cwd: o.cwd || '',
@@ -149,46 +152,159 @@ function costOf(c) {
     c.cacheWrite1h * p.input * m.write1h + c.cacheRead * p.input * m.read) / 1e6;
 }
 
+// ---------- 裝置與同步 ----------
+// 每台裝置把自己的呼叫紀錄寫成一個檔案（本機 history.json；啟用同步時寫到 <syncDir>/devices/<id>.json），
+// 讀取時合併所有裝置的檔案。每台只寫自己的檔案，所以 OneDrive 不會產生衝突；
+// 檔案保留歷史，Claude Code 清掉舊對話紀錄後用量也不會消失。
+const DEVICE_ID_PATH = path.join(DATA_DIR, 'device-id');
+let deviceId = '';
+try { deviceId = fs.readFileSync(DEVICE_ID_PATH, 'utf8').trim(); } catch { /* 首次執行 */ }
+if (!deviceId) {
+  deviceId = `${os.hostname()}-${Math.random().toString(36).slice(2, 8)}`.replace(/[^\w.-]/g, '_');
+  fs.writeFileSync(DEVICE_ID_PATH, deviceId);
+}
+const FILE_VERSION = 1;
+const deviceName = () => config.deviceName || os.hostname();
+
+function detectOneDrive() {
+  const base = process.env.OneDriveCommercial || process.env.OneDrive || process.env.OneDriveConsumer;
+  return base ? path.join(base, 'ClaudeTokenUsage') : '';
+}
+function ownArchivePath() {
+  return config.syncDir ? path.join(config.syncDir, 'devices', `${deviceId}.json`) : path.join(DATA_DIR, 'history.json');
+}
+const indexer = () => { const m = new Map(), arr = []; return { arr, get(k) { if (!m.has(k)) { m.set(k, arr.length); arr.push(k); } return m.get(k); } }; };
+
+function encodeDevice(calls, titles) {
+  const sessions = indexer(), cwds = indexer(), models = indexer(), prompts = indexer();
+  const rows = calls.map(c => [c.key, c.ts, sessions.get(c.session), cwds.get(c.cwd), models.get(c.model),
+    c.input, c.output, c.cacheWrite, c.cacheWrite1h, c.cacheRead, c.thinking, c.tools.join(','), c.sub ? 1 : 0, prompts.get(c.prompt || '')]);
+  const t = {};
+  for (const s of sessions.arr) if (titles[s]) t[s] = titles[s];
+  return { version: FILE_VERSION, device: { id: deviceId, name: deviceName() }, updatedAt: Date.now(),
+    sessions: sessions.arr, titles: t, cwds: cwds.arr, models: models.arr, prompts: prompts.arr, rows };
+}
+function decodeDevice(d) {
+  const calls = d.rows.map(r => ({
+    key: r[0], ts: r[1], session: d.sessions[r[2]], cwd: d.cwds[r[3]], model: d.models[r[4]],
+    input: r[5], output: r[6], cacheWrite: r[7], cacheWrite1h: r[8], cacheRead: r[9], thinking: r[10],
+    tools: r[11] ? r[11].split(',') : [], sub: !!r[12], prompt: d.prompts[r[13]],
+  }));
+  return { device: d.device, updatedAt: d.updatedAt, calls, titles: d.titles || {} };
+}
+function readJson(p) { try { return JSON.parse(fs.readFileSync(p, 'utf8')); } catch { return null; } }
+function writeJsonAtomic(p, obj) {
+  fs.mkdirSync(path.dirname(p), { recursive: true });
+  const tmp = p + '.tmp';
+  fs.writeFileSync(tmp, JSON.stringify(obj));
+  fs.renameSync(tmp, p);
+}
+
+let archive = null;          // 本機裝置的歷史：Map(key -> call)
+let archiveTitles = {};
+let archivePathLoaded = '';
+let archiveDirty = false, lastArchiveWrite = 0;
+let syncError = '';
+function loadArchive() {
+  const p = ownArchivePath();
+  if (archive && archivePathLoaded === p) return;
+  archive = archive || new Map();
+  // 第一次載入或切換同步資料夾時，合併兩個位置的歷史
+  for (const src of new Set([p, path.join(DATA_DIR, 'history.json')])) {
+    const d = readJson(src);
+    if (d && d.version === FILE_VERSION) {
+      const dec = decodeDevice(d);
+      for (const c of dec.calls) if (!archive.has(c.key)) archive.set(c.key, c);
+      Object.assign(archiveTitles, dec.titles);
+    }
+  }
+  archivePathLoaded = p; archiveDirty = true; lastArchiveWrite = 0;
+}
+function flushArchive() {
+  if (!archiveDirty || Date.now() - lastArchiveWrite < 60e3) return;
+  const calls = [...archive.values()].sort((a, b) => a.ts - b.ts);
+  try {
+    writeJsonAtomic(ownArchivePath(), encodeDevice(calls, archiveTitles));
+    archiveDirty = false; lastArchiveWrite = Date.now(); syncError = '';
+  } catch (e) { syncError = `寫入同步檔失敗：${e.message}`; console.error(syncError); }
+}
+
+const remoteCache = new Map(); // path -> { mtimeMs, dev }
+function readRemoteDevices() {
+  let changed = false;
+  const seen = new Set();
+  if (config.syncDir) {
+    const dir = path.join(config.syncDir, 'devices');
+    let names = [];
+    try { names = fs.readdirSync(dir).filter(n => n.endsWith('.json') && n !== `${deviceId}.json`); } catch { /* 資料夾還不存在 */ }
+    for (const n of names) {
+      const p = path.join(dir, n);
+      seen.add(p);
+      let st; try { st = fs.statSync(p); } catch { continue; }
+      const c = remoteCache.get(p);
+      if (c && c.mtimeMs === st.mtimeMs) continue;
+      const d = readJson(p);
+      if (!d || d.version !== FILE_VERSION) continue; // 可能還在同步中，下次再讀
+      remoteCache.set(p, { mtimeMs: st.mtimeMs, dev: decodeDevice(d) });
+      changed = true;
+    }
+  }
+  for (const p of [...remoteCache.keys()]) if (!seen.has(p)) { remoteCache.delete(p); changed = true; }
+  return { list: [...remoteCache.values()].map(v => v.dev), changed };
+}
+
 let dataset = null, datasetStamp = '';
 function buildDataset() {
+  loadArchive();
   const files = listJsonl(config.projectsDir);
-  let changed = false;
+  let changed = !dataset;
   const seen = new Set(files);
   for (const f of files) {
     let st;
     try { st = fs.statSync(f); } catch { continue; }
     const cached = fileCache.get(f);
     if (cached && cached.mtimeMs === st.mtimeMs && cached.size === st.size) continue;
-    try { fileCache.set(f, { mtimeMs: st.mtimeMs, size: st.size, ...parseFile(f) }); changed = true; } catch (e) { console.error('解析失敗', f, e.message); }
+    try {
+      const parsed = parseFile(f);
+      fileCache.set(f, { mtimeMs: st.mtimeMs, size: st.size });
+      for (const c of parsed.calls) archive.set(c.key, c);
+      Object.assign(archiveTitles, parsed.titles);
+      changed = true; archiveDirty = true;
+    } catch (e) { console.error('解析失敗', f, e.message); }
   }
-  for (const f of [...fileCache.keys()]) if (!seen.has(f)) { fileCache.delete(f); changed = true; }
-  if (!changed && dataset) return dataset;
+  // 本機紀錄被 Claude Code 清掉時只移除快取，歷史仍保留在 archive
+  for (const f of [...fileCache.keys()]) if (!seen.has(f)) fileCache.delete(f);
+  flushArchive();
+  const remote = readRemoteDevices();
+  if (!changed && !remote.changed && dataset) return dataset;
 
+  const devices = [{ device: { id: deviceId, name: deviceName() }, updatedAt: Date.now(), calls: [...archive.values()], titles: archiveTitles, local: true },
+    ...remote.list];
   const titles = {};
   const all = [];
-  for (const v of fileCache.values()) { Object.assign(titles, v.titles); all.push(...v.calls); }
-  all.sort((a, b) => a.ts - b.ts);
+  devices.forEach((d, di) => { Object.assign(titles, d.titles); for (const c of d.calls) all.push([c, di]); });
+  all.sort((a, b) => a[0].ts - b[0].ts);
 
-  const idx = () => { const m = new Map(), arr = []; return { arr, get(k) { if (!m.has(k)) { m.set(k, arr.length); arr.push(k); } return m.get(k); } }; };
-  const sessions = idx(), projects = idx(), models = idx(), prompts = idx();
+  const sessions = indexer(), projects = indexer(), models = indexer(), prompts = indexer();
   const sessionInfo = {};
   const firstCwd = {};
-  for (const c of all) if (c.cwd && !firstCwd[c.session]) firstCwd[c.session] = c.cwd;
-  const rows = all.map(c => {
+  for (const [c] of all) if (c.cwd && !firstCwd[c.session]) firstCwd[c.session] = c.cwd;
+  const rows = all.map(([c, di]) => {
     const si = sessions.get(c.session);
     const cwd0 = firstCwd[c.session] || '';
     const pi = projects.get(cwd0 ? path.basename(cwd0) || cwd0 : '(未知)');
-    const s = sessionInfo[si] || (sessionInfo[si] = { id: c.session, title: titles[c.session] || '', project: pi, cwd: cwd0 });
+    if (!sessionInfo[si]) sessionInfo[si] = { id: c.session, title: titles[c.session] || '', project: pi, cwd: cwd0, device: di };
     const scen = c.tools.length ? classifyTool(c.tools[0]) : 7;
     return [c.ts, si, pi, models.get(c.model), c.input, c.output, c.cacheWrite, c.cacheRead,
-      +costOf(c).toFixed(6), scen, c.sub ? 1 : 0, prompts.get(c.prompt || ''), c.thinking, c.tools.join(',')];
+      +costOf(c).toFixed(6), scen, c.sub ? 1 : 0, prompts.get(c.prompt || ''), c.thinking, c.tools.join(','), di];
   });
   dataset = {
     generatedAt: Date.now(),
     scenarios: SCENARIOS,
+    devices: devices.map(d => ({ id: d.device.id, name: d.device.name, updatedAt: d.updatedAt, local: !!d.local, calls: d.calls.length })),
     sessions: sessions.arr.map((id, i) => sessionInfo[i]),
     projects: projects.arr, models: models.arr, prompts: prompts.arr,
-    fields: ['ts', 'session', 'project', 'model', 'input', 'output', 'cacheWrite', 'cacheRead', 'cost', 'scenario', 'sub', 'prompt', 'thinking', 'tools'],
+    fields: ['ts', 'session', 'project', 'model', 'input', 'output', 'cacheWrite', 'cacheRead', 'cost', 'scenario', 'sub', 'prompt', 'thinking', 'tools', 'device'],
     rows,
   };
   datasetStamp = String(dataset.generatedAt);
@@ -259,6 +375,7 @@ function refresh() {
 }
 
 // ---------- HTTP ----------
+const configView = () => ({ ...config, deviceId, deviceNameResolved: deviceName(), detectedOneDrive: detectOneDrive(), syncError });
 const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8' };
 function send(res, code, body, type = 'application/json; charset=utf-8') {
   res.writeHead(code, { 'Content-Type': type, 'Cache-Control': 'no-store' });
@@ -275,7 +392,7 @@ const server = http.createServer((req, res) => {
   }
   if (url.pathname === '/api/ping') return send(res, 200, { app: 'claude-token-usage', pid: process.pid });
   if (url.pathname === '/api/alerts') return send(res, 200, { alerts: alertLog });
-  if (url.pathname === '/api/config' && req.method === 'GET') return send(res, 200, config);
+  if (url.pathname === '/api/config' && req.method === 'GET') return send(res, 200, configView());
   if (url.pathname === '/api/config' && req.method === 'POST') {
     let body = '';
     req.on('data', d => { body += d; if (body.length > 1e5) req.destroy(); });
@@ -286,11 +403,18 @@ const server = http.createServer((req, res) => {
         if (patch.thresholds) next.thresholds = { ...config.thresholds, ...patch.thresholds };
         if (patch.pricing) next.pricing = patch.pricing;
         if (typeof patch.windowsToast === 'boolean') next.windowsToast = patch.windowsToast;
+        if (typeof patch.deviceName === 'string') next.deviceName = patch.deviceName.trim().slice(0, 60);
+        if (typeof patch.syncDir === 'string') {
+          const dir = patch.syncDir.trim();
+          if (dir && !path.isAbsolute(dir)) throw new Error('同步資料夾必須是完整路徑');
+          if (dir) fs.mkdirSync(path.join(dir, 'devices'), { recursive: true });
+          next.syncDir = dir;
+        }
         fs.writeFileSync(CONFIG_PATH, JSON.stringify(next, null, 2));
         config = next;
         dataset = null; fileCache.clear(); // 價格可能變了，重新計算
         refresh();
-        send(res, 200, config);
+        send(res, 200, configView());
       } catch (e) { send(res, 400, { error: e.message }); }
     });
     return;
