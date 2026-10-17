@@ -1,0 +1,17 @@
+{
+  "description": "Claude Code 啟動時在背景啟動用量伺服器，讓門檻通知持續運作",
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/start.js\" --background",
+            "timeout": 15
+          }
+        ]
+      }
+    ]
+  }
+}
