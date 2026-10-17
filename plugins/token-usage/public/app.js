@@ -2,7 +2,7 @@
 // ---------- 狀態 ----------
 const S = {
   data: null, etag: null, config: null,
-  range: '7d', metric: 'tokens', project: '', model: '', source: '', device: '', app: (() => { try { const v = localStorage.getItem('app'); return v == null ? '0' : v; } catch { return '0'; } })(),
+  range: '7d', metric: 'tokens', project: '', model: '', source: '', device: '', app: (() => { try { const v = localStorage.getItem('app'); return v == null ? 'auto' : v; } catch { return 'auto'; } })(),
   tab: 'overview', session: null, sessSort: { key: 'last', dir: -1 },
 };
 const R = { ts: 0, session: 1, project: 2, model: 3, input: 4, output: 5, cw: 6, cr: 7, cost: 8, scen: 9, sub: 10, prompt: 11, thinking: 12, tools: 13, device: 14, app: 15 };
@@ -430,6 +430,12 @@ function dismissAlerts() {
 
 // ---------- 設定 ----------
 // ---------- 工具與模型 ----------
+// 第一次開啟時選最近一次有用到的工具（只裝 Codex 的人會直接看到 Codex）
+function pickDefaultApp() {
+  const last = S.data.rows.length ? S.data.rows[S.data.rows.length - 1][R.app] : 0;
+  S.app = String(last);
+  $('#appSeg').querySelectorAll('button').forEach(b => b.classList.toggle('on', b.dataset.v === S.app));
+}
 const APP_KEYS = ['claude', 'codex'];
 function viewApps() { return S.app === '' ? [0, 1] : [+S.app]; }
 function fillModelSelect() {
@@ -580,6 +586,7 @@ async function load() {
     if (res.status === 200) {
       S.etag = res.headers.get('ETag');
       S.data = await res.json();
+      if (S.app === 'auto') pickDefaultApp();
       fillSelect('#fProject', S.data.projects, S.project);
       fillModelSelect();
       fillSelect('#fDevice', S.data.devices.map(deviceLabel), S.device);

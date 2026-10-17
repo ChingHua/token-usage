@@ -1,5 +1,5 @@
-// Claude Token 用量儀表板 — 本機伺服器（無外部相依套件）
-// 讀取 ~/.claude/projects/**/*.jsonl，彙整每次 API 呼叫的 token 用量，提供儀表板與門檻通知。
+// AI Token 用量儀表板 — 本機伺服器（無外部相依套件）
+// 讀取 Claude Code（~/.claude/projects）與 OpenAI Codex（~/.codex/sessions）的對話紀錄，彙整每次 API 呼叫的 token 用量，提供儀表板與門檻通知。
 'use strict';
 const fs = require('fs');
 const path = require('path');
@@ -513,7 +513,7 @@ const server = http.createServer((req, res) => {
     });
     return;
   }
-  if (url.pathname === '/api/test-toast') { toast('Claude Token 儀表板', '這是一則測試通知'); return send(res, 200, { ok: true }); }
+  if (url.pathname === '/api/test-toast') { toast('AI Token 用量儀表板', '這是一則測試通知'); return send(res, 200, { ok: true }); }
 
   const rel = url.pathname === '/' ? 'index.html' : url.pathname.slice(1);
   const file = path.normalize(path.join(PUBLIC, rel));
@@ -531,7 +531,7 @@ server.on('error', e => {
   process.exit(1);
 });
 server.listen(config.port, '127.0.0.1', () => {
-  console.log(`Claude Token 儀表板：http://localhost:${config.port}`);
+  console.log(`AI Token 用量儀表板：http://localhost:${config.port}`);
   console.log(`設定檔：${CONFIG_PATH}`);
   console.log(`資料來源：${config.projectsDir}（${dataset ? dataset.rows.length : 0} 次 API 呼叫）`);
 });

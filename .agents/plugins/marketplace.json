@@ -1,0 +1,20 @@
+{
+  "name": "ai-usage-tools",
+  "interface": {
+    "displayName": "AI Usage Tools"
+  },
+  "plugins": [
+    {
+      "name": "token-usage",
+      "source": {
+        "source": "local",
+        "path": "./plugins/token-usage"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    }
+  ]
+}

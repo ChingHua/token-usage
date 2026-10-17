@@ -68,7 +68,7 @@
         <div class="chart"><canvas id="cModels"></canvas></div>
       </div>
       <div class="card span2">
-        <div class="card-h"><h2>5 小時滾動視窗（近 48 小時）</h2><span class="muted">對應 Claude 方案以 5 小時計算的用量限制</span></div>
+        <div class="card-h"><h2>5 小時滾動視窗（近 48 小時）</h2><span class="muted">Claude 與 Codex 的訂閱方案都以 5 小時為單位計算用量限制</span></div>
         <div class="chart"><canvas id="cWindow"></canvas></div>
       </div>
       <div class="card">
@@ -175,7 +175,7 @@
         <div class="card-h"><h2>多裝置同步</h2><span class="muted">合計自己多台電腦的用量</span></div>
         <form id="syncForm" class="form">
           <label>這台裝置的名稱<input name="deviceName" placeholder="例如：辦公室桌機"></label>
-          <label>同步資料夾（OneDrive 內的資料夾，留空代表不同步）<input name="syncDir" placeholder="C:Users你OneDriveClaudeTokenUsage"></label>
+          <label>同步資料夾（OneDrive 內的資料夾，留空代表不同步）<input name="syncDir" placeholder="例如 C:\Users\你的帳號\OneDrive\ClaudeTokenUsage"></label>
           <div class="row">
             <button type="submit">儲存</button>
             <button type="button" id="useOneDrive" class="ghost" hidden>使用偵測到的 OneDrive</button>
