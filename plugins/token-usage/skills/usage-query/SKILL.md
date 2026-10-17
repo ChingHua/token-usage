@@ -38,6 +38,16 @@ curl -s "URL/api/data"
 
 回傳的 `rows` 每一列欄位順序見 `fields`（ts, session, project, model, input, output, cacheWrite, cacheRead, cost, scenario, sub, prompt, thinking, tools, device, app）。`app` 是 `apps` 的索引（0 = Claude Code、1 = Codex）；`sessions`、`projects`、`models`、`prompts`、`scenarios` 是對應的索引表；`limits.codex` 是 Codex 方案額度使用率。資料量可能很大，用 node 單行程式彙總後再回答，不要把原始 JSON 印出來。回答時說明是哪個工具的用量，花費是依 API 價格換算的估計。
 
+## 讀不到某些用量時（診斷）
+
+使用者說某些用量沒出現（例如 Codex 桌面版、WSL、另一個 Codex 資料夾）時，執行：
+
+```bash
+node "<本 SKILL.md 所在資料夾>/../../scripts/diagnose.js"
+```
+
+它會列出所有找得到的 Claude Code / Codex 紀錄資料夾、每個資料夾的紀錄來源（CLI、exec、桌面版等）、儀表板讀不讀得到。有「儀表板目前不會讀」的資料夾時，照輸出的提示把它加進 `config.json` 的 `extraCodexDirs`，再重新啟動儀表板。
+
 ## 設定
 
 設定檔在 `~/.claude-token-usage/config.json`：連接埠、通知門檻、自訂模型價格、多裝置同步資料夾。也可以在儀表板的「通知與設定」分頁修改。

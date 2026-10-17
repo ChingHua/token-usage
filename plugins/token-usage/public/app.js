@@ -585,6 +585,7 @@ function fillConfig() {
   sf.elements.deviceName.value = S.config.deviceName || '';
   sf.elements.deviceName.placeholder = S.config.deviceNameResolved;
   sf.elements.syncDir.value = S.config.syncDir || '';
+  if (/Mac/i.test(navigator.platform)) sf.elements.syncDir.placeholder = '例如 /Users/你的帳號/Library/CloudStorage/OneDrive-公司名稱/ClaudeTokenUsage';
   $('#useOneDrive').hidden = !S.config.detectedOneDrive || S.config.syncDir === S.config.detectedOneDrive;
   $('#syncMsg').textContent = S.config.syncError || (S.config.syncDir ? '同步中：' + S.config.syncDir : '目前未同步，只顯示這台電腦的用量');
 
@@ -713,7 +714,7 @@ $('#savePricing').addEventListener('click', () => {
   PRICE_DIRTY = false;
   saveConfig({ priceOverridesPatch: collectPricePatch() }, '#prMsg').then(() => loadPrices());
 });
-$('#testToast').addEventListener('click', () => fetch('/api/test-toast').then(() => { $('#thMsg').textContent = '已送出測試通知（請看螢幕右下角）'; }));
+$('#testToast').addEventListener('click', () => fetch('/api/test-toast').then(() => { $('#thMsg').textContent = '已送出測試通知（Windows 在右下角、macOS 在右上角）'; }));
 $('#enableNotif').addEventListener('click', async () => {
   if (!('Notification' in window)) { $('#thMsg').textContent = '此瀏覽器不支援通知'; return; }
   const p = await Notification.requestPermission();

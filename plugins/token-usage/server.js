@@ -20,6 +20,7 @@ const DEFAULT_CONFIG = {
   port: 8787,
   projectsDir: path.join(process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude'), 'projects'),
   codexDir: process.env.CODEX_HOME || path.join(os.homedir(), '.codex'), // OpenAI Codex 的資料夾（讀 sessions 與 archived_sessions）
+  extraCodexDirs: [],     // 其他 Codex 資料夾，例如 WSL 裡的 \\wsl.localhost\Ubuntu\home\<帳號>\.codex（用 diagnose.js 找）
   refreshSeconds: 30,
   windowsToast: true,
   syncDir: '',            // 多裝置同步資料夾（例如 OneDrive 內的資料夾），空白代表不同步
@@ -326,7 +327,16 @@ let codexLimits = null;
 const deviceName = () => config.deviceName || os.hostname();
 
 function detectOneDrive() {
-  const base = process.env.OneDriveCommercial || process.env.OneDrive || process.env.OneDriveConsumer;
+  // Windows：OneDrive 安裝程式會設定環境變數
+  let base = process.env.OneDriveCommercial || process.env.OneDrive || process.env.OneDriveConsumer;
+  // macOS：OneDrive 放在 ~/Library/CloudStorage/OneDrive-<帳號或公司名稱>，公司帳號優先
+  if (!base && process.platform === 'darwin') {
+    const cs = path.join(os.homedir(), 'Library', 'CloudStorage');
+    try {
+      const dirs = fs.readdirSync(cs).filter(n => n.startsWith('OneDrive')).sort((a, b) => (a === 'OneDrive-Personal') - (b === 'OneDrive-Personal'));
+      if (dirs.length) base = path.join(cs, dirs[0]);
+    } catch { /* 沒有安裝 OneDrive */ }
+  }
   return base ? path.join(base, 'ClaudeTokenUsage') : '';
 }
 function ownArchivePath() {
@@ -415,7 +425,9 @@ function readRemoteDevices() {
 let dataset = null, datasetStamp = '';
 function buildDataset() {
   loadArchive();
-  const codexFiles = config.codexDir ? [...listJsonl(path.join(config.codexDir, 'sessions')), ...listJsonl(path.join(config.codexDir, 'archived_sessions'))] : [];
+  // 主要的 Codex 資料夾，加上使用者另外指定的（例如 Codex 桌面版 WSL 模式在 Linux 那一側的 ~/.codex）
+  const codexDirs = [...new Set([config.codexDir, ...(Array.isArray(config.extraCodexDirs) ? config.extraCodexDirs : [])].filter(Boolean))];
+  const codexFiles = codexDirs.flatMap(d => [...listJsonl(path.join(d, 'sessions')), ...listJsonl(path.join(d, 'archived_sessions'))]);
   const codexSet = new Set(codexFiles);
   const files = [...listJsonl(config.projectsDir), ...codexFiles];
   let changed = !dataset;
@@ -517,7 +529,7 @@ function checkAlerts(ds) {
     const a = { key, title, body, ts: now };
     alertLog.unshift(a); alertLog.length = Math.min(alertLog.length, 100);
     console.log(`[通知] ${title} — ${body}`);
-    if (config.windowsToast && process.platform === 'win32') toast(title, body);
+    if (config.windowsToast) toast(title, body); // 設定名稱沿用舊版，實際上各作業系統都適用
   };
   if (t.dailyCost && dayCost >= t.dailyCost) fire(`dailyCost|${today}`, '今日花費超過門檻', `今日估算 $${dayCost.toFixed(2)}（門檻 $${t.dailyCost}）`);
   if (t.dailyTokens && dayTok >= t.dailyTokens) fire(`dailyTokens|${today}`, '今日 token 超過門檻', `今日 ${fmtTok(dayTok)} tokens（門檻 ${fmtTok(t.dailyTokens)}）`);
@@ -545,11 +557,22 @@ $t.Item(0).AppendChild($x.CreateTextNode($env:TU_TOAST_TITLE)) > $null
 $t.Item(1).AppendChild($x.CreateTextNode($env:TU_TOAST_BODY)) > $null
 $n = [Windows.UI.Notifications.ToastNotification]::new($x)
 [Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier('{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}\\WindowsPowerShell\\v1.0\\powershell.exe').Show($n)`;
+// macOS：JXA 從環境變數讀標題與內文（支援中文），同樣不把文字拼進腳本
+const TOAST_JXA = `ObjC.import('Foundation');
+const env = $.NSProcessInfo.processInfo.environment;
+const get = k => ObjC.unwrap(env.objectForKey(k)) || '';
+const app = Application.currentApplication();
+app.includeStandardAdditions = true;
+app.displayNotification(get('TU_TOAST_BODY'), { withTitle: get('TU_TOAST_TITLE') });`;
+
+// 系統通知：Windows 用 Toast、macOS 用通知中心、Linux 用 notify-send（有安裝時）
 function toast(title, body) {
-  const env = { ...process.env, TU_TOAST_TITLE: String(title).slice(0, 200), TU_TOAST_BODY: String(body).slice(0, 500) };
-  execFile('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', TOAST_PS], { windowsHide: true, env }, err => {
-    if (err) console.error('Windows 通知失敗：', err.message);
-  });
+  const t = String(title).slice(0, 200), b = String(body).slice(0, 500);
+  const env = { ...process.env, TU_TOAST_TITLE: t, TU_TOAST_BODY: b };
+  const done = err => { if (err) console.error('系統通知失敗：', err.message); };
+  if (process.platform === 'win32') execFile('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', TOAST_PS], { windowsHide: true, env }, done);
+  else if (process.platform === 'darwin') execFile('osascript', ['-l', 'JavaScript', '-e', TOAST_JXA], { env }, done);
+  else execFile('notify-send', ['--', t, b], done);
 }
 
 function refresh() {

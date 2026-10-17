@@ -18,7 +18,7 @@
 - **Node.js 18 以上**（在終端機輸入 `node -v` 確認；沒有的話到 https://nodejs.org 安裝）
 - 這台電腦有用過 Claude Code 或 Codex（至少一種）
 - 瀏覽器（儀表板開在 http://localhost:8787 ）
-- 作業系統：Windows、macOS、Linux 都可以。Windows 系統通知只在 Windows 上有；其他系統可以用瀏覽器通知。
+- 作業系統：Windows、macOS、Linux 都可以。系統通知：Windows 用通知中心的 Toast、macOS 用通知中心、Linux 需要有 `notify-send`；也都可以改用瀏覽器通知。
 
 ## 安裝
 
@@ -93,7 +93,7 @@ codex plugin add token-usage@ai-usage-tools
 | 系統 | 啟動並開啟瀏覽器 | 停止 | 查看狀態 |
 |---|---|---|---|
 | Windows | 雙擊 `start.cmd` | `start.cmd --stop` | `start.cmd --status` |
-| macOS / Linux | `./start.sh` | `./start.sh --stop` | `./start.sh --status` |
+| macOS / Linux | `./start.sh`（用 ZIP 下載的話改用 `sh start.sh`） | `./start.sh --stop` | `./start.sh --status` |
 
 **更新**：`git pull`（或重新下載 ZIP），然後先 `--stop` 再重新啟動。
 
@@ -154,6 +154,30 @@ Claude Code 和 Codex 各有自己的價格表（[prices.json](plugins/token-usa
 - 檔案會保留歷史紀錄：Claude Code 或 Codex 自動清掉舊對話紀錄後，用量仍然留著。沒啟用同步時，歷史存在 `~/.claude-token-usage/history.json`。
 - 門檻通知用的是所有裝置的合計；每台開著的電腦都會各自跳通知。
 
+## 疑難排解：某些用量沒有出現
+
+先執行診斷，它會列出這台電腦上所有找得到的 Claude Code / Codex 紀錄資料夾、每個資料夾的紀錄來源（CLI、`exec`、桌面版、IDE 等），以及儀表板讀不讀得到。只會讀取，不會修改任何檔案。
+
+| 安裝方式 | 執行診斷 |
+|---|---|
+| Claude Code plugin | `/token-usage diagnose` |
+| Codex plugin | 對 Codex 說「診斷用量儀表板讀不到的紀錄」 |
+| 直接執行 | `node plugins/token-usage/scripts/diagnose.js` |
+
+如果診斷列出「儀表板目前不會讀」的資料夾，照它印出的那一行加進 `config.json` 的 `extraCodexDirs`，再重新啟動儀表板（`--stop` 後再啟動）。
+
+### Codex 桌面版
+
+| 系統 | 紀錄位置 | 儀表板 |
+|---|---|---|
+| Windows（原生模式） | `%USERPROFILE%.codex`，和 Windows 版 CLI 共用 | 預設就會讀 |
+| Windows（WSL 模式） | 桌面版「設定」把 agent 切到 WSL 時，Codex 跑在 Linux 子系統裡，紀錄可能在 WSL 裡的 `~/.codex`（例如 `\wsl.localhostUbuntuhome<帳號>.codex`） | 用診斷找到後加進 `extraCodexDirs` |
+| macOS | `~/.codex`，和 CLI 共用 | 預設就會讀 |
+
+- OpenAI 官方文件說明了 Windows 原生模式與 CLI 共用 `%USERPROFILE%.codex`、WSL 裡的 CLI 預設用 Linux 家目錄（[Windows 桌面版文件](https://learn.chatgpt.com/docs/windows/windows-app.md)）；macOS 桌面版與 WSL 模式的實際位置官方沒有明寫，請以診斷結果為準。
+- 「Codex 額度使用率」是整個帳號共用的數字，已經包含桌面版、CLI 與雲端任務的用量。
+- ChatGPT（網頁 / 桌面 / 手機）的聊天，以及在 chatgpt.com 上執行的 Codex 雲端任務，不會在電腦上留下用量紀錄，所以統計不到。
+
 ## 隱私
 
 - 所有資料都在你的電腦上處理。儀表板伺服器只監聽 `127.0.0.1`。對外連線只有兩個，而且都只是下載、不會傳送你的資料：網頁從 cdnjs 載入圖表函式庫 Chart.js；伺服器每天從 GitHub 下載一次價格表（可以關閉）。
@@ -169,11 +193,12 @@ Claude Code 和 Codex 各有自己的價格表（[prices.json](plugins/token-usa
 | `port` | 儀表板連接埠，預設 8787 |
 | `projectsDir` | Claude Code 紀錄位置 |
 | `codexDir` | Codex 資料夾位置 |
+| `extraCodexDirs` | 其他要一起讀的 Codex 資料夾（例如 WSL 裡的），可以用診斷找出來 |
 | `thresholds` | 通知門檻（也可以在儀表板修改） |
 | `priceOverrides` | AI 更新與自訂的模型價格（也可以在儀表板修改） |
 | `remotePrices`、`remotePricesUrl` | 是否每天下載最新價格表、下載位址 |
 | `syncDir`、`deviceName` | 多裝置同步 |
-| `windowsToast` | 是否顯示 Windows 系統通知 |
+| `windowsToast` | 是否顯示系統通知（名稱沿用舊版，Windows / macOS / Linux 都適用） |
 
 記錄檔在同一個資料夾的 `server.log`。
 
@@ -193,6 +218,7 @@ plugins/token-usage/
 ├── hooks/                       # Claude Code 啟動時自動執行（Codex 不支援 plugin hook）
 ├── scripts/start.js             # 啟動 / 停止伺服器
 ├── scripts/prices.js            # 價格工具：show / apply / promote
+├── scripts/diagnose.js          # 診斷：找出所有紀錄資料夾與來源
 ├── prices.json                  # 官方價格表（使用者每天從 GitHub 下載這個檔案）
 ├── server.js, pricing.js        # 伺服器、價格合併與比對
 └── public/                      # 儀表板網頁
