@@ -74,6 +74,8 @@ codex plugin add token-usage@ai-usage-tools
 - Codex 沒有 `/token-usage` 這種指令，是透過 plugin 內附的 skill 來執行。
 - 儀表板伺服器要在背景持續執行。Codex 的沙箱可能會擋下來，這時請核准它在沙箱外執行，或改用[直接執行](#c-直接執行不安裝-plugin)的方式開啟。
 - Codex 不會執行 plugin 的啟動 hook，所以重開機後要再開啟一次，門檻通知才會繼續運作。
+- 用 `codex exec`（非互動模式）時：預設的唯讀沙箱會擋下讀取 skill 的指令，需要加 `--approve-for-me`（或在互動模式按核准）。另外如果伺服器是在 `codex exec` 裡第一次啟動，`codex exec` 會等到伺服器結束才退出；建議先用 `start.cmd` / `./start.sh` 啟動伺服器。
+- Codex 自動審核核准時會用到 `codex-auto-review` 模型，OpenAI 官方價目表沒有列出它的價格，所以會顯示為「未定價」。
 
 **更新**：
 

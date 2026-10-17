@@ -44,7 +44,9 @@ node "SCRIPTS/prices.js" show
 - `input` 輸入、`output` 輸出
 - `cacheRead`：Claude 的 cache hits / cache reads；OpenAI 的 cached input
 - Claude 的快取寫入：`cacheWrite5m`（5 分鐘）、`cacheWrite1h`（1 小時）。官方剛好是輸入價格的 1.25 倍 / 2 倍時可以省略
-- 長上下文價格：只在官方有列時才填 `long: { "threshold": 提示 token 門檻, "input", "output", "cacheRead" }`（例如 OpenAI 部分模型超過 272K、Claude Haiku 5.5 超過 100K）
+- 長上下文價格：只在官方有列時才填 `long: { "threshold": 提示 token 門檻, "input", "output", "cacheRead" }`（例如 OpenAI 部分模型超過 272K、Claude Haiku 5.5 超過 100K）。**三個價格都要填**：官方有列長上下文的快取價格（cached input / cache hits）時，`long.cacheRead` 不能省略，比對差異時也要逐項比對這三個值
+
+讀檔提醒：在 Windows PowerShell 讀本檔或其他文字檔時請加 `-Encoding UTF8`，否則中文會變亂碼。
 
 優先處理 `unpriced` 裡的模型，再檢查 `seenModels` 用到的模型價格有沒有變。官方頁面沒有列出的模型**不要猜**，告訴使用者找不到。
 
@@ -76,7 +78,7 @@ node "SCRIPTS/prices.js" show
 node "SCRIPTS/prices.js" apply "<JSON 檔路徑>"
 ```
 
-結果會列出 `applied`（已寫入）和 `skipped`（略過的原因）。使用者在儀表板手動改過的價格不會被覆蓋；只有使用者明確要求時才加 `--force`。
+結果會列出 `applied`（已寫入）、`skipped`（略過的原因）和 `warnings`（例如長上下文少了快取價格；有的話照提示補上後重新 apply）。使用者在儀表板手動改過的價格不會被覆蓋；只有使用者明確要求時才加 `--force`。
 
 ### 5. 回報
 

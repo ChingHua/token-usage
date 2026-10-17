@@ -60,7 +60,7 @@ async function apply(file, force) {
   if (!Array.isArray(changes) || !changes.length) die('檔案裡沒有 changes');
   const cfg = readConfig();
   cfg.priceOverrides = cfg.priceOverrides || {};
-  const done = [], skipped = [];
+  const done = [], skipped = [], warnings = [];
   for (const c of changes) {
     if (!TOOLS.includes(c.tool)) { skipped.push(`${c.model}：tool 必須是 ${TOOLS.join(' 或 ')}`); continue; }
     if (!c.model || typeof c.model !== 'string') { skipped.push('缺少 model'); continue; }
@@ -72,6 +72,8 @@ async function apply(file, force) {
     if (err) { skipped.push(`${c.tool}/${c.model}：${err}`); continue; }
     const cur = (cfg.priceOverrides[c.tool] || {})[c.model];
     if (cur && cur.source !== 'ai' && !force) { skipped.push(`${c.tool}/${c.model}：使用者手動自訂過，不覆蓋（加 --force 才會覆蓋）`); continue; }
+    // 長上下文少填快取價格時，超過門檻的呼叫會沿用一般快取價格；寫入但提醒
+    if (p.long && p.cacheRead != null && p.long.cacheRead == null) warnings.push(`${c.tool}/${c.model}：long 沒有 cacheRead，超過 ${p.long.threshold} token 的呼叫會沿用一般快取價格 ${p.cacheRead}；官方有列的話請補上後重新 apply`);
     cfg.priceOverrides[c.tool] = cfg.priceOverrides[c.tool] || {};
     cfg.priceOverrides[c.tool][c.model] = { ...p, source: 'ai', updatedAt: today(), ...(c.sourceUrl ? { sourceUrl: c.sourceUrl } : {}) };
     done.push(`${c.tool}/${c.model}`);
@@ -80,7 +82,7 @@ async function apply(file, force) {
   fs.writeFileSync(CONFIG_PATH, JSON.stringify(cfg, null, 2));
   let reloaded = false;
   try { await request('POST', '/api/reload'); reloaded = true; } catch { /* 伺服器沒在執行，下次啟動時會讀到 */ }
-  console.log(JSON.stringify({ applied: done, skipped, serverReloaded: reloaded }, null, 2));
+  console.log(JSON.stringify({ applied: done, skipped, warnings, serverReloaded: reloaded }, null, 2));
 }
 
 // 維護者用：在倉庫裡執行（要用倉庫裡的這份 prices.js，不是已安裝的 plugin），把 AI 更新併進內建的 prices.json
