@@ -1,0 +1,41 @@
+name: 價格錯誤 / 新模型
+description: 某個模型的價格不對、顯示「未定價」，或官方推出了新模型
+title: "[價格] "
+labels: [pricing]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        儀表板的價格表每天會自動從這個倉庫下載，修正後所有使用者一天內就會更新，不用重新安裝。
+        在你自己的電腦上也可以先對 Claude Code 或 Codex 說「更新模型價格」暫時補上。
+  - type: dropdown
+    id: tool
+    attributes:
+      label: 哪個工具的模型
+      options:
+        - Claude（Claude Code）
+        - OpenAI（Codex）
+    validations:
+      required: true
+  - type: input
+    id: model
+    attributes:
+      label: 模型 ID
+      description: 和儀表板「模型價格」或診斷結果裡的寫法一樣
+      placeholder: 例如 gpt-5.5、claude-opus-5-5
+    validations:
+      required: true
+  - type: input
+    id: source
+    attributes:
+      label: 官方價目頁網址
+      description: 只接受官方來源（Anthropic 或 OpenAI 的價目頁）
+      placeholder: https://developers.openai.com/api/docs/pricing
+    validations:
+      required: true
+  - type: textarea
+    id: detail
+    attributes:
+      label: 正確的價格
+      description: 美元 / 百萬 token：輸入、輸出、快取（cached input / cache hits），有長上下文價格的話也一起寫
+      placeholder: 輸入 5、快取 0.5、輸出 30；超過 272K：輸入 10、快取 1、輸出 45

@@ -1,0 +1,84 @@
+name: 問題回報
+description: 用量不對、儀表板打不開、讀不到某些紀錄、錯誤訊息等
+title: "[Bug] "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        感謝回報！請先執行診斷並把結果貼在下面，可以大幅加快處理速度：
+        - Claude Code plugin：`/token-usage diagnose`
+        - Codex plugin：對 Codex 說「診斷用量儀表板讀不到的紀錄」
+        - 直接執行：`node plugins/token-usage/scripts/diagnose.js`
+
+        ⚠️ 貼上前請檢查內容，**不要**貼出密碼、API 金鑰、權杖或你不想公開的提問內容。
+  - type: textarea
+    id: what
+    attributes:
+      label: 發生了什麼事
+      description: 你看到什麼、原本預期看到什麼
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: 重現步驟
+      placeholder: |
+        1. 開啟儀表板
+        2. 切到 Codex
+        3. ...
+  - type: input
+    id: version
+    attributes:
+      label: plugin 版本
+      description: 診斷結果裡的「已安裝的 plugin 版本」，或 README 版本紀錄裡最新的版本
+      placeholder: 例如 0.6.4
+    validations:
+      required: true
+  - type: dropdown
+    id: install
+    attributes:
+      label: 安裝方式
+      options:
+        - Claude Code plugin
+        - Codex plugin
+        - 直接執行（start.cmd / start.sh）
+    validations:
+      required: true
+  - type: dropdown
+    id: tools
+    attributes:
+      label: 用到的 AI 工具（可複選）
+      multiple: true
+      options:
+        - Claude Code（終端機）
+        - Claude Code（桌面 App / IDE）
+        - Codex CLI
+        - Codex 桌面版（Windows 原生模式）
+        - Codex 桌面版（Windows WSL 模式）
+        - Codex 桌面版（macOS）
+        - Codex IDE 外掛
+    validations:
+      required: true
+  - type: dropdown
+    id: os
+    attributes:
+      label: 作業系統
+      options:
+        - Windows
+        - macOS
+        - Linux
+        - WSL
+    validations:
+      required: true
+  - type: textarea
+    id: diagnose
+    attributes:
+      label: 診斷結果
+      description: 貼上診斷的完整輸出
+      render: text
+  - type: textarea
+    id: extra
+    attributes:
+      label: 其他資訊
+      description: 截圖、錯誤訊息、`~/.claude-token-usage/server.log` 的相關內容等

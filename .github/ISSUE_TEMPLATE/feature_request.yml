@@ -1,0 +1,27 @@
+name: 功能建議
+description: 想要的新功能或改善
+title: "[建議] "
+labels: [enhancement]
+body:
+  - type: textarea
+    id: want
+    attributes:
+      label: 想要什麼功能
+      description: 想解決什麼問題、希望怎麼運作
+    validations:
+      required: true
+  - type: dropdown
+    id: tools
+    attributes:
+      label: 跟哪個工具有關（可複選）
+      multiple: true
+      options:
+        - Claude Code
+        - Codex
+        - 儀表板網頁
+        - 其他 AI 工具
+  - type: textarea
+    id: extra
+    attributes:
+      label: 其他資訊
+      description: 參考畫面、類似工具的做法等

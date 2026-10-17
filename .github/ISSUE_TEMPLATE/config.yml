@@ -1,0 +1,5 @@
+blank_issues_enabled: true
+contact_links:
+  - name: 疑難排解說明
+    url: https://github.com/ChingHua/token-usage#疑難排解某些用量沒有出現
+    about: 先看看常見問題與診斷方式，可能不用開 issue 就能解決

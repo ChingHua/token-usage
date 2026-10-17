@@ -46,7 +46,7 @@ function codexSummary(dir) {
 
 // 可能存放 Codex 資料的位置
 function codexCandidates() {
-  const c = new Set([configuredCodex, ...extraDirs, path.join(home, '.codex')]);
+  const c = new Set([configuredCodex, ...extraDirs, process.env.CODEX_HOME, path.join(home, '.codex')].filter(Boolean));
   if (process.platform === 'darwin') {
     for (const base of [path.join(home, 'Library', 'Application Support'), path.join(home, 'Library', 'Containers')]) {
       try { for (const n of fs.readdirSync(base)) if (/codex|openai/i.test(n)) c.add(path.join(base, n)); } catch { /* 沒有 */ }

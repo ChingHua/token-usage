@@ -1,0 +1,12 @@
+{
+  "name": "token-usage",
+  "private": true,
+  "description": "Local dashboard for Claude Code and OpenAI Codex token usage (Claude Code / Codex plugin)",
+  "license": "MIT",
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "test": "node tests/run.js"
+  }
+}

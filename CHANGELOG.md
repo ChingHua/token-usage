@@ -1,5 +1,11 @@
 # 版本紀錄
 
+## 0.6.5（2026-10-17）
+
+- 新增自動化測試（`npm test`，使用假資料），並在 GitHub Actions 上於 Windows、macOS、Linux 自動執行。
+- 新增 issue 範本（問題回報、價格錯誤 / 新模型、功能建議）與給 AI 協作者的 CLAUDE.md / AGENTS.md。
+- 診斷工具也會檢查 `CODEX_HOME` 指到的資料夾。
+
 ## 0.6.4（2026-10-17）
 
 - 整理兩個 skill 的說明：統一腳本路徑寫法、補上 Windows PowerShell 讀檔要加 `-Encoding UTF8`、`usage-query` 加上診斷的使用時機與完整設定表。

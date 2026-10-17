@@ -203,6 +203,14 @@ Claude Code 和 Codex 各有自己的價格表（[prices.json](plugins/token-usa
 
 記錄檔在同一個資料夾的 `server.log`。
 
+## 回報問題
+
+到 [Issues](https://github.com/ChingHua/token-usage/issues/new/choose) 選擇範本：
+
+- **問題回報**：請先執行診斷（`/token-usage diagnose`，Codex 則說「診斷用量儀表板讀不到的紀錄」）並把結果貼上，再填版本、安裝方式、AI 工具與作業系統。貼上前請確認沒有密碼、金鑰或不想公開的內容。
+- **價格錯誤 / 新模型**：附上官方價目頁網址。價格表修正後，所有使用者一天內自動更新。
+- **功能建議**。
+
 ## 版本紀錄
 
 每個版本改了什麼，見 [CHANGELOG.md](CHANGELOG.md)。
@@ -227,14 +235,20 @@ plugins/token-usage/
 ├── prices.json                  # 官方價格表（使用者每天從 GitHub 下載這個檔案）
 ├── server.js, pricing.js        # 伺服器、價格合併與比對
 └── public/                      # 儀表板網頁
+tests/                           # 自動化測試
+.github/                         # issue 範本、CI
 .claude-plugin/marketplace.json  # Claude Code 市集
 .agents/plugins/marketplace.json # Codex 市集
 ```
 
 ```
+npm test                             # 執行自動化測試（假資料，不需要真實紀錄）
 node plugins/token-usage/server.js   # 前景執行伺服器
 claude plugin validate .             # 驗證 Claude Code 市集與 plugin
 ```
+
+- 測試在 `tests/`，使用 Node 內建的 `node:test`，沒有相依套件。每次 push 到 main 或開 PR 時，GitHub Actions 會在 Windows、macOS、Linux（Node 18 與 22）上自動執行。
+- 給 AI 協作者（Claude Code、Codex、雲端工作階段）的規則寫在 [CLAUDE.md](CLAUDE.md)（Codex 讀 [AGENTS.md](AGENTS.md)）。
 
 更新價格表（不用發佈新版本）：
 
