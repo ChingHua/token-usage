@@ -8,6 +8,7 @@ const os = require('os');
 const path = require('path');
 const http = require('http');
 const { execFileSync } = require('child_process');
+const { listLogFiles: walk, isCompressed, readLog, zstdMethod } = require('../logfile');
 
 const home = os.homedir();
 const DATA_DIR = process.env.TOKEN_USAGE_HOME || path.join(home, '.claude-token-usage');
@@ -18,30 +19,29 @@ const configuredCodex = config.codexDir || process.env.CODEX_HOME || path.join(h
 const extraDirs = Array.isArray(config.extraCodexDirs) ? config.extraCodexDirs : [];
 const isRead = d => [configuredCodex, ...extraDirs].some(x => path.resolve(x) === path.resolve(d));
 
-const walk = (d, out = []) => {
-  let es; try { es = fs.readdirSync(d, { withFileTypes: true }); } catch { return out; }
-  for (const e of es) { const p = path.join(d, e.name); if (e.isDirectory()) walk(p, out); else if (e.name.endsWith('.jsonl')) out.push(p); }
-  return out;
-};
 const exists = p => { try { fs.accessSync(p); return true; } catch { return false; } };
 
 // 讀每個 Codex 紀錄檔的 session_meta，依來源（originator / source）分組
 function codexSummary(dir) {
   const files = [...walk(path.join(dir, 'sessions')), ...walk(path.join(dir, 'archived_sessions'))];
   const by = {};
-  let newest = 0;
+  let newest = 0, compressed = 0, unreadable = 0;
   for (const f of files) {
     let meta = null;
+    const zst = isCompressed(f);
+    if (zst) compressed++;
     try {
-      const fd = fs.openSync(f, 'r'); const buf = Buffer.alloc(256 * 1024); const n = fs.readSync(fd, buf, 0, buf.length, 0); fs.closeSync(fd);
-      const line = buf.toString('utf8', 0, n).split('\n').find(l => l.includes('"session_meta"'));
-      if (line) meta = JSON.parse(line).payload || {};
       newest = Math.max(newest, fs.statSync(f).mtimeMs);
-    } catch { /* 檔案不完整 */ }
+      let text;
+      if (zst) text = readLog(f).slice(0, 256 * 1024);
+      else { const fd = fs.openSync(f, 'r'); const buf = Buffer.alloc(256 * 1024); const n = fs.readSync(fd, buf, 0, buf.length, 0); fs.closeSync(fd); text = buf.toString('utf8', 0, n); }
+      const line = text.split('\n').find(l => l.includes('"session_meta"'));
+      if (line) meta = JSON.parse(line).payload || {};
+    } catch (e) { if (e.code === 'NO_ZSTD') unreadable++; /* 其他：檔案不完整 */ }
     const k = meta ? `${meta.originator || '?'} / ${typeof meta.source === 'string' ? meta.source : JSON.stringify(meta.source)}` : '(讀不到 session_meta)';
     by[k] = (by[k] || 0) + 1;
   }
-  return { files: files.length, by, newest };
+  return { files: files.length, by, newest, compressed, unreadable };
 }
 
 // 可能存放 Codex 資料的位置
@@ -85,6 +85,7 @@ function get(p) {
   const fmt = ms => (ms ? new Date(ms).toLocaleString() : '-');
   console.log(`== 系統：${process.platform} ${os.release()}，Node ${process.version}`);
   console.log(`== 儀表板讀取的 Codex 資料夾：${configuredCodex}`);
+  console.log(`== 解壓 .jsonl.zst：${{ node: 'Node 內建 zstd', cli: '系統的 zstd 指令' }[zstdMethod()] || '無法解壓（需要 Node 22.15 以上或 zstd 指令）'}`);
 
   console.log('\n== 找到的 Codex 資料夾');
   let found = 0;
@@ -98,7 +99,8 @@ function get(p) {
     if (!read && s.files) missing.push(dir);
     const tag = read ? '（儀表板會讀）' : '（儀表板目前不會讀）';
     console.log(`${dir} ${tag}`);
-    console.log(`  紀錄檔 ${s.files} 個，最新一筆 ${fmt(s.newest)}`);
+    console.log(`  紀錄檔 ${s.files} 個${s.compressed ? `（其中壓縮檔 .jsonl.zst ${s.compressed} 個）` : ''}，最新一筆 ${fmt(s.newest)}`);
+    if (s.unreadable) console.log(`  ⚠ ${s.unreadable} 個壓縮檔無法解壓，儀表板不會統計：請把 Node 升級到 22.15 以上，或安裝 zstd 指令`);
     for (const [k, n] of Object.entries(s.by).sort((a, b) => b[1] - a[1])) console.log(`  來源 ${k}：${n}`);
   }
   if (!found) console.log('（沒有找到任何 Codex 紀錄）');

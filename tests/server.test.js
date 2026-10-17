@@ -186,3 +186,28 @@ test('每天下載的價格表：較新的版本會被採用，下載失敗保�
   assert.match(p.remote.error, /404/);
   assert.equal(p.updated, '2099-01-01', '下載失敗時保留原本的價格表');
 });
+
+test('Codex 壓縮紀錄（.jsonl.zst）：會被解析，和未壓縮檔重複的呼叫只算一次', async t => {
+  const root = H.tmpDir();
+  const codexDir = path.join(root, 'codex');
+  H.writeCodexFixture(codexDir);
+  const { meta, tc, common } = H.writeCodexFixture.records;
+  const day = path.join(codexDir, 'sessions', '2026', '09', '30');
+  // 同一個 session 壓縮過的版本（與 rollout-a.jsonl 完全重複），以及只有壓縮檔的舊 session（多一次呼叫）
+  const ok = H.writeJsonlZst(path.join(day, 'rollout-a.jsonl.zst'), common)
+    && H.writeJsonlZst(path.join(codexDir, 'archived_sessions', 'rollout-old.jsonl.zst'), [
+      { ...meta('codex-OLD', 20), payload: { id: 'codex-OLD', cwd: '/home/u/old', originator: 'Codex Desktop', source: 'vscode' } },
+      { timestamp: common[1].timestamp, type: 'turn_context', payload: { model: 'gpt-5.5', cwd: '/home/u/old' } },
+      tc(21, 800, 600, 100, 40),
+    ]);
+  if (!ok) { t.skip('這台電腦沒辦法產生 zstd 壓縮檔'); H.rm(root); return; }
+  const s = await H.startServer({ projectsDir: path.join(root, 'p'), codexDir });
+  t.after(async () => { await s.stop(); H.rm(root); H.rm(s.home); });
+  const codex = H.rowsOf(await s.get('/api/data')).filter(r => r.app === 'Codex');
+  const E = H.EXPECTED.codex;
+  assert.equal(codex.length, E.calls + 1);
+  assert.equal(sum(codex, 'input'), E.input + 500);
+  assert.equal(sum(codex, 'output'), E.output + 40);
+  assert.equal(sum(codex, 'cacheRead'), E.cacheRead + 100);
+  assert.ok(codex.some(r => r.session === 'codex-OLD' && r.project === 'old'));
+});

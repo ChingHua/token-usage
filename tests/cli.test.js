@@ -87,6 +87,7 @@ test('diagnose.js：找到 Codex 資料夾並依來源分組，提示沒讀到�
   const otherCodex = path.join(root, 'other', '.codex');
   H.writeCodexFixture(codexDir);
   H.writeCodexFixture(otherCodex);
+  const zst = H.writeJsonlZst(path.join(codexDir, 'sessions', 'old.jsonl.zst'), H.writeCodexFixture.records.common);
   const home = path.join(root, 'home');
   fs.mkdirSync(home);
   fs.writeFileSync(path.join(home, 'config.json'), JSON.stringify({ port: 1, codexDir, extraCodexDirs: [] }));
@@ -95,7 +96,8 @@ test('diagnose.js：找到 Codex 資料夾並依來源分組，提示沒讀到�
     const out = node(path.join(H.PLUGIN, 'scripts', 'diagnose.js'), [], { ...process.env, TOKEN_USAGE_HOME: home, CODEX_HOME: otherCodex });
     assert.ok(out.includes(`${codexDir} （儀表板會讀）`), '列出儀表板讀的資料夾');
     assert.ok(out.includes(`${otherCodex} （儀表板目前不會讀）`), '列出儀表板沒讀的資料夾');
-    assert.match(out, /codex_cli_rs \/ cli：2/);
+    assert.match(out, zst ? /codex_cli_rs \/ cli：3/ : /codex_cli_rs \/ cli：2/, '壓縮檔也依來源分組');
+    if (zst) assert.match(out, /其中壓縮檔 \.jsonl\.zst 1 個/);
     assert.match(out, /"extraCodexDirs":/, '印出要加進設定檔的那一行');
   } finally { H.rm(root); }
 });
