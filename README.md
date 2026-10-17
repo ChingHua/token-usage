@@ -48,6 +48,7 @@
 | `/token-usage` | 啟動儀表板並開啟瀏覽器 |
 | `/token-usage status` | 查看伺服器是否在執行 |
 | `/token-usage stop` | 停止伺服器 |
+| `/token-usage diagnose` | 診斷：列出所有紀錄資料夾與來源，找出讀不到的用量（見[疑難排解](#疑難排解某些用量沒有出現)） |
 
 也可以直接問 Claude「我今天用了多少 token？」，它會用內附的 skill 回答。
 
@@ -111,7 +112,7 @@ codex plugin add token-usage@ai-usage-tools
 - **總覽**：今日 / 5 小時視窗 / 快取命中率、用量時間軸、token 類型組成、模型分佈、5 小時滾動視窗、使用時段熱度圖、專案排行；Codex 另外顯示方案額度使用率
 - **情境分析**：依每次呼叫使用的工具分成 8 種情境（讀取/搜尋、編輯檔案、執行指令、網頁/瀏覽器、子代理派工、規劃/流程、MCP 工具、文字回覆），附工具排行與最耗用的提問
 - **Sessions**：每個 session 的 token、花費、最大上下文；點選可看上下文成長、累積花費、每次提問的消耗
-- **通知與設定**：門檻超過時跳出系統通知（Windows）、瀏覽器通知與頁面橫幅；模型價格、多裝置同步
+- **通知與設定**：門檻超過時跳出系統通知（Windows / macOS / Linux）、瀏覽器通知與頁面橫幅；模型價格、多裝置同步
 
 工具之間的差異會自動處理：
 
@@ -170,11 +171,11 @@ Claude Code 和 Codex 各有自己的價格表（[prices.json](plugins/token-usa
 
 | 系統 | 紀錄位置 | 儀表板 |
 |---|---|---|
-| Windows（原生模式） | `%USERPROFILE%.codex`，和 Windows 版 CLI 共用 | 預設就會讀 |
-| Windows（WSL 模式） | 桌面版「設定」把 agent 切到 WSL 時，Codex 跑在 Linux 子系統裡，紀錄可能在 WSL 裡的 `~/.codex`（例如 `\wsl.localhostUbuntuhome<帳號>.codex`） | 用診斷找到後加進 `extraCodexDirs` |
+| Windows（原生模式） | `%USERPROFILE%\.codex`，和 Windows 版 CLI 共用 | 預設就會讀 |
+| Windows（WSL 模式） | 桌面版「設定」把 agent 切到 WSL 時，Codex 跑在 Linux 子系統裡，紀錄可能在 WSL 裡的 `~/.codex`（例如 `\\wsl.localhost\Ubuntu\home\<帳號>\.codex`） | 用診斷找到後加進 `extraCodexDirs` |
 | macOS | `~/.codex`，和 CLI 共用 | 預設就會讀 |
 
-- OpenAI 官方文件說明了 Windows 原生模式與 CLI 共用 `%USERPROFILE%.codex`、WSL 裡的 CLI 預設用 Linux 家目錄（[Windows 桌面版文件](https://learn.chatgpt.com/docs/windows/windows-app.md)）；macOS 桌面版與 WSL 模式的實際位置官方沒有明寫，請以診斷結果為準。
+- OpenAI 官方文件說明了 Windows 原生模式與 CLI 共用 `%USERPROFILE%\.codex`、WSL 裡的 CLI 預設用 Linux 家目錄（[Windows 桌面版文件](https://learn.chatgpt.com/docs/windows/windows-app.md)）；macOS 桌面版與 WSL 模式的實際位置官方沒有明寫，請以診斷結果為準。
 - 「Codex 額度使用率」是整個帳號共用的數字，已經包含桌面版、CLI 與雲端任務的用量。
 - ChatGPT（網頁 / 桌面 / 手機）的聊天，以及在 chatgpt.com 上執行的 Codex 雲端任務，不會在電腦上留下用量紀錄，所以統計不到。
 
@@ -201,6 +202,10 @@ Claude Code 和 Codex 各有自己的價格表（[prices.json](plugins/token-usa
 | `windowsToast` | 是否顯示系統通知（名稱沿用舊版，Windows / macOS / Linux 都適用） |
 
 記錄檔在同一個資料夾的 `server.log`。
+
+## 版本紀錄
+
+每個版本改了什麼，見 [CHANGELOG.md](CHANGELOG.md)。
 
 ## 授權
 

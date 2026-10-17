@@ -7,14 +7,17 @@ description: 依官方價目表更新 AI Token 用量儀表板的模型價格（
 
 用官方價目表更新儀表板的價格。流程一定是：**查目前狀態 → 讀官方價目 → 列出差異 → 使用者確認 → 寫入**。沒有使用者明確同意前，不要寫入任何價格。
 
-## 腳本位置
+## 準備
 
 腳本在這個 plugin 的 `scripts/` 資料夾，也就是**本 SKILL.md 所在資料夾往上兩層**的 `scripts/`：
 
 - Claude Code：`${CLAUDE_PLUGIN_ROOT}/scripts/`
 - Codex 或其他工具：`<本檔案所在資料夾>/../../scripts/`
 
-下面用 `SCRIPTS` 代表這個路徑。需要 Node.js 18 以上。
+下面用 `SCRIPTS` 代表這個路徑。
+
+- 需要 Node.js 18 以上。
+- 在 Windows PowerShell 讀本檔或其他文字檔時加 `-Encoding UTF8`，否則中文會變亂碼。
 
 ## 步驟
 
@@ -45,8 +48,6 @@ node "SCRIPTS/prices.js" show
 - `cacheRead`：Claude 的 cache hits / cache reads；OpenAI 的 cached input
 - Claude 的快取寫入：`cacheWrite5m`（5 分鐘）、`cacheWrite1h`（1 小時）。官方剛好是輸入價格的 1.25 倍 / 2 倍時可以省略
 - 長上下文價格：只在官方有列時才填 `long: { "threshold": 提示 token 門檻, "input", "output", "cacheRead" }`（例如 OpenAI 部分模型超過 272K、Claude Haiku 5.5 超過 100K）。**三個價格都要填**：官方有列長上下文的快取價格（cached input / cache hits）時，`long.cacheRead` 不能省略，比對差異時也要逐項比對這三個值
-
-讀檔提醒：在 Windows PowerShell 讀本檔或其他文字檔時請加 `-Encoding UTF8`，否則中文會變亂碼。
 
 優先處理 `unpriced` 裡的模型，再檢查 `seenModels` 用到的模型價格有沒有變。官方頁面沒有列出的模型**不要猜**，告訴使用者找不到。
 

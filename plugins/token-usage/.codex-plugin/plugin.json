@@ -1,6 +1,6 @@
 {
   "name": "token-usage",
-  "version": "0.6.3",
+  "version": "0.6.4",
   "description": "Local dashboard for Claude Code and OpenAI Codex token usage, cost estimates and usage alerts",
   "author": {
     "name": "ChingHua",

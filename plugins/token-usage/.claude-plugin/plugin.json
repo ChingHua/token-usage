@@ -1,6 +1,6 @@
 {
   "name": "token-usage",
-  "version": "0.6.3",
+  "version": "0.6.4",
   "description": "Claude Code 與 Codex 的 token 用量儀表板：用量細項、session 用量、各情境消耗、多種圖表與用量門檻通知",
   "author": {
     "name": "ChingHua",
