@@ -152,8 +152,8 @@ function renderOverview(rows) {
     const byModel = S.data.models.map(() => b.keys.map(() => 0));
     rows.forEach(r => { const i = b.index(r[R.ts]); if (i != null) byModel[r[R.model]][i] += r[R.cost]; });
     const used = S.data.models.map((m, i) => i).filter(i => byModel[i].some(v => v));
-    sets = used.map((mi, k) => barDs(S.data.models[mi], byModel[mi], slot(k + 1), k === used.length - 1));
-    legend('#tlLegend', used.map((mi, k) => [S.data.models[mi], slot(k + 1)]));
+    sets = used.map((mi, k) => barDs(S.data.models[mi], byModel[mi], slot((k % 8) + 1), k === used.length - 1));
+    legend('#tlLegend', used.map((mi, k) => [S.data.models[mi], slot((k % 8) + 1)]));
   } else {
     const arr = TYPES.map(() => b.keys.map(() => 0));
     rows.forEach(r => { const i = b.index(r[R.ts]); if (i != null) TYPES.forEach((t, k) => { arr[k][i] += r[t.idx]; }); });
@@ -462,13 +462,15 @@ function renderPriceNotice() {
 
 // ---------- 價格表 ----------
 let PRICES = null;
-async function loadPrices() {
+// background：定期更新時呼叫；使用者正在編輯價格表時不重畫表格，避免蓋掉還沒儲存的輸入
+async function loadPrices(background) {
   PRICES = await (await fetch('/api/prices')).json();
-  renderPrices();
+  const editing = PRICE_DIRTY || $('#priceTables').contains(document.activeElement);
+  if (!(background && editing)) renderPrices();
   if (S.data) renderPriceNotice();
 }
 $('#remotePrices').addEventListener('change', e => {
-  saveConfig({ remotePrices: e.target.checked }, '#remoteMsg').then(loadPrices);
+  saveConfig({ remotePrices: e.target.checked }, '#remoteMsg').then(() => loadPrices());
 });
 $('#checkPrices').addEventListener('click', async () => {
   $('#remoteMsg').textContent = '檢查中…';
@@ -479,7 +481,8 @@ $('#checkPrices').addEventListener('click', async () => {
 const num = v => (v == null || v === '' ? '' : v);
 function renderPrices() {
   if (!PRICES || !S.data) return;
-  $('#priceMeta').innerHTML = `官方價格表 ${PRICES.updated}（${PRICES.baseSource === 'remote' ? 'GitHub 最新版' : 'plugin 內建'}）・<a href="${PRICES.sources.claude}" target="_blank" rel="noopener">Claude 價目</a>・<a href="${PRICES.sources.codex}" target="_blank" rel="noopener">OpenAI 價目</a>`;
+  const link = (u, label) => /^https:\/\//.test(u || '') ? `<a href="${esc(u)}" target="_blank" rel="noopener">${label}</a>` : label;
+  $('#priceMeta').innerHTML = `官方價格表 ${esc(PRICES.updated)}（${PRICES.baseSource === 'remote' ? 'GitHub 最新版' : 'plugin 內建'}）・${link(PRICES.sources.claude, 'Claude 價目')}・${link(PRICES.sources.codex, 'OpenAI 價目')}`;
   $('#remotePrices').checked = PRICES.remote.enabled;
   $('#checkPrices').disabled = !PRICES.remote.enabled;
   $('#remoteMsg').textContent = !PRICES.remote.enabled ? '已關閉，只使用 plugin 內建的價格表'
@@ -502,7 +505,9 @@ function renderPrices() {
       const inp = (f, v, ph = '') => `<input type="number" step="any" min="0" data-tool="${tool}" data-model="${esc(name)}" data-f="${f}" value="${num(v)}" placeholder="${ph}">`;
       const longTxt = p && p.long ? `＞${fmtTok(p.long.threshold)}：${p.long.input} / ${p.long.output}` : '';
       const srcTip = p && p.source === 'ai' ? ` title="${esc(`${p.updatedAt || ''} ${p.sourceUrl || ''}`.trim())}"` : '';
-      const src = p ? `<span class="src ${p.source}"${srcTip}>${{ official: '官方', estimate: '估計', ai: 'AI 更新', custom: '自訂' }[p.source] || ''}</span>` : '<span class="src">未定價</span>';
+      const SRC = { official: '官方', estimate: '估計', ai: 'AI 更新', custom: '自訂' };
+      const srcKey = p && SRC[p.source] ? p.source : 'custom';
+      const src = p ? `<span class="src ${srcKey}"${srcTip}>${SRC[srcKey]}</span>` : '<span class="src">未定價</span>';
       const isOverride = p && (p.source === 'custom' || p.source === 'ai');
       const reset = isOverride ? ` <button class="link-btn" data-reset="${tool}|${esc(name)}">${PRICES.defaults[tool][name] ? '還原' : '刪除'}</button>` : '';
       return `<tr class="${p ? '' : 'unpriced'}"><td>${esc(name)}${users.length ? `<div class="muted small">也套用於 ${users.map(esc).join('、')}</div>` : ''}</td>
@@ -524,9 +529,12 @@ function renderPrices() {
 function usedCount(tool, name) {
   return (S.data.models_seen || []).filter(m => m.app === tool && m.priceKey === name).reduce((s, m) => s + m.calls, 0);
 }
-// 只把和預設值不同的價格存成自訂；其他工具（目前沒顯示）的自訂值保持不變
-function collectPriceOverrides() {
-  const out = JSON.parse(JSON.stringify(PRICES.overrides || {}));
+// 只送出有改動的列（{ 工具: { 模型: 價格 | null } }），由伺服器合併進最新的設定檔；
+// 這樣頁面開著時 AI 寫入的價格不會被舊資料蓋掉。改回和官方相同的價格會送 null（刪除自訂）。
+let PRICE_DIRTY = false;
+function collectPricePatch() {
+  const out = {};
+  const put = (tool, m, v) => { (out[tool] = out[tool] || {})[m] = v; };
   const read = (tool, model) => {
     const v = {};
     document.querySelectorAll(`#priceTables input[data-tool="${tool}"][data-f]`).forEach(i => {
@@ -534,36 +542,36 @@ function collectPriceOverrides() {
     });
     return v;
   };
+  const FIELDS = ['input', 'output', 'cacheRead', 'cacheWrite5m'];
   for (const ai of viewApps()) {
     const tool = APP_KEYS[ai];
-    out[tool] = out[tool] || {};
     const models = new Set([...document.querySelectorAll(`#priceTables input[data-tool="${tool}"][data-f]`)].map(i => i.dataset.model));
     for (const m of models) {
       const v = read(tool, m);
+      const eff = PRICES.effective[tool][m];
       const def = PRICES.defaults[tool][m];
-      if (v.input == null || v.output == null) { if (!def) delete out[tool][m]; continue; }
-      const base = PRICES.effective[tool][m] || {};
-      const merged = { ...base, ...v };
-      const FIELDS = ['input', 'output', 'cacheRead', 'cacheWrite5m'];
+      if (v.input == null || v.output == null) continue; // 未填完整：不處理
       // 這一列沒有被改動：維持原狀（AI 更新仍是 AI 更新）
-      if (PRICES.effective[tool][m] && FIELDS.every(f => (base[f] ?? null) === (merged[f] ?? null))) continue;
-      delete merged.source; delete merged.updatedAt; delete merged.sourceUrl;
+      if (eff && FIELDS.every(f => (eff[f] ?? null) === (v[f] ?? (f === 'cacheWrite5m' ? null : eff[f]) ?? null))) continue;
+      const merged = { ...v };
+      if (eff && eff.long) merged.long = eff.long;
+      if (eff && eff.fast) merged.fast = eff.fast;
       const same = def && FIELDS.every(f => (def[f] ?? null) === (merged[f] ?? null));
-      if (same) delete out[tool][m]; else out[tool][m] = merged;
+      put(tool, m, same ? null : merged);
     }
     const nameEl = document.querySelector(`#priceTables input[data-tool="${tool}"][data-new]`);
     const nv = {};
     document.querySelectorAll(`#priceTables input[data-tool="${tool}"][data-new-f]`).forEach(i => { if (i.value !== '') nv[i.dataset.newF] = +i.value; });
-    if (nameEl && nameEl.value.trim() && nv.input != null && nv.output != null) out[tool][nameEl.value.trim()] = nv;
+    if (nameEl && nameEl.value.trim() && nv.input != null && nv.output != null) put(tool, nameEl.value.trim(), nv);
   }
   return out;
 }
+$('#priceTables').addEventListener('input', () => { PRICE_DIRTY = true; });
 $('#priceTables').addEventListener('click', e => {
   const b = e.target.closest('[data-reset]'); if (!b) return;
   const [tool, model] = b.dataset.reset.split('|');
-  const ov = JSON.parse(JSON.stringify(PRICES.overrides || {}));
-  if (ov[tool]) delete ov[tool][model];
-  saveConfig({ priceOverrides: ov }, '#prMsg').then(loadPrices);
+  PRICE_DIRTY = false;
+  saveConfig({ priceOverridesPatch: { [tool]: { [model]: null } } }, '#prMsg').then(() => loadPrices());
 });
 
 function renderDevices() {
@@ -602,22 +610,45 @@ function render() {
 }
 function fillSelect(sel, items, keepVal) {
   const el = $(sel);
-  el.innerHTML = '<option value="">全部</option>' + items.map((n, i) => `<option value="${i}">${esc(n)}</option>`).sort((a, b) => a.localeCompare(b)).join('');
+  el.innerHTML = '<option value="">全部</option>' + items.map((n, i) => [n, i]).sort((a, b) => String(a[0]).localeCompare(String(b[0])))
+    .map(([n, i]) => `<option value="${i}">${esc(n)}</option>`).join('');
   el.value = keepVal;
+}
+// 每次重建資料時，專案 / 模型 / 裝置 / session 的索引都可能改變；用名稱或 ID 把目前的選擇對回新的索引
+function remapSelection(prev, next) {
+  const back = (list, i, key) => (i === '' || i == null || !prev ? null : key(list(prev)[+i]));
+  const find = (list, v, key) => { const i = list(next).findIndex(x => key(x) === v); return i; };
+  const sel = [
+    ['project', d => d.projects, x => x],
+    ['model', d => d.models, x => x],
+    ['device', d => d.devices, x => x && x.id],
+  ];
+  for (const [k, list, key] of sel) {
+    const v = back(list, S[k], key);
+    if (v == null) continue;
+    const i = find(list, v, key);
+    S[k] = i < 0 ? '' : String(i);
+  }
+  if (S.session != null && prev) {
+    const id = prev.sessions[S.session] && prev.sessions[S.session].id;
+    const i = next.sessions.findIndex(s => s.id === id);
+    S.session = i < 0 ? null : i;
+  }
 }
 async function load() {
   try {
     const res = await fetch('/api/data', { headers: S.etag ? { 'If-None-Match': S.etag } : {} });
     if (res.status === 200) {
       S.etag = res.headers.get('ETag');
-      S.data = await res.json();
+      const next = await res.json();
+      remapSelection(S.data, next);
+      S.data = next;
       if (S.app === 'auto') pickDefaultApp();
       fillSelect('#fProject', S.data.projects, S.project);
       fillModelSelect();
       fillSelect('#fDevice', S.data.devices.map(deviceLabel), S.device);
       renderDevices();
-      renderPriceNotice();
-      renderPrices();
+      await loadPrices(true);
       render();
     }
     $('#status').textContent = `${S.data.rows.length.toLocaleString()} 次 API 呼叫・更新於 ${fmtTime(Date.now())}`;
@@ -679,7 +710,8 @@ $('#syncForm').addEventListener('submit', e => {
 });
 $('#useOneDrive').addEventListener('click', () => { $('#syncForm').elements.syncDir.value = S.config.detectedOneDrive; });
 $('#savePricing').addEventListener('click', () => {
-  saveConfig({ priceOverrides: collectPriceOverrides() }, '#prMsg').then(loadPrices);
+  PRICE_DIRTY = false;
+  saveConfig({ priceOverridesPatch: collectPricePatch() }, '#prMsg').then(() => loadPrices());
 });
 $('#testToast').addEventListener('click', () => fetch('/api/test-toast').then(() => { $('#thMsg').textContent = '已送出測試通知（請看螢幕右下角）'; }));
 $('#enableNotif').addEventListener('click', async () => {

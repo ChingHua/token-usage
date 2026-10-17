@@ -1,5 +1,4 @@
 {
-  "description": "Claude Code 啟動時在背景啟動用量伺服器，讓門檻通知持續運作",
   "hooks": {
     "SessionStart": [
       {

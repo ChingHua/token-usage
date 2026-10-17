@@ -32,7 +32,8 @@ node "START"
 
 ```bash
 node "START" --no-open
-curl -s http://localhost:8787/api/data
+node "START" --url        # 印出儀表板網址（使用者可能改過 port），下面以 URL 表示
+curl -s "URL/api/data"
 ```
 
 回傳的 `rows` 每一列欄位順序見 `fields`（ts, session, project, model, input, output, cacheWrite, cacheRead, cost, scenario, sub, prompt, thinking, tools, device, app）。`app` 是 `apps` 的索引（0 = Claude Code、1 = Codex）；`sessions`、`projects`、`models`、`prompts`、`scenarios` 是對應的索引表；`limits.codex` 是 Codex 方案額度使用率。資料量可能很大，用 node 單行程式彙總後再回答，不要把原始 JSON 印出來。回答時說明是哪個工具的用量，花費是依 API 價格換算的估計。

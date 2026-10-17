@@ -21,7 +21,7 @@ const DATA_DIR = process.env.TOKEN_USAGE_HOME || path.join(os.homedir(), '.claud
 const CONFIG_PATH = path.join(DATA_DIR, 'config.json');
 const readConfig = () => { try { return JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8')); } catch { return {}; } };
 const port = () => readConfig().port || 8787;
-const today = () => new Date().toISOString().slice(0, 10);
+const today = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; }; // 本地日期（不是 UTC）
 const die = msg => { console.error(msg); process.exit(1); };
 
 function request(method, p) {

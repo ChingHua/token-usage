@@ -28,6 +28,8 @@ function validatePriceFile(d) {
   if (!d || d.schema !== 1) return 'schema 不是 1';
   if (!/^\d{4}-\d{2}-\d{2}$/.test(d.updated || '')) return 'updated 日期格式錯誤';
   if (!d.models || typeof d.models !== 'object') return '缺少 models';
+  // 價格檔可能是從網路下載的：連結只接受 https，避免被塞進 javascript: 之類的網址
+  for (const [k, u] of Object.entries(d.sources || {})) if (typeof u !== 'string' || !/^https:\/\/[^\s"'<>]+$/.test(u)) return `sources.${k} 不是 https 網址`;
   for (const tool of TOOLS) {
     const t = d.models[tool];
     if (!t || typeof t !== 'object') return `缺少 models.${tool}`;
@@ -49,6 +51,7 @@ function validatePrice(p) {
     for (const f of ['input', 'output', 'cacheRead']) if (p.long[f] != null && !(p.long[f] >= 0 && p.long[f] <= 10000)) return `long.${f} 不合理`;
   }
   if (p.fast != null && !(p.fast >= 1 && p.fast <= 10)) return 'fast 倍率不合理';
+  if (p.source != null && !['official', 'estimate', 'ai', 'custom'].includes(p.source)) return `source 不合法：${p.source}`;
   return null;
 }
 
@@ -75,8 +78,11 @@ function matchModel(table, model) {
   if (table[model]) return model;
   const undated = model.replace(/-\d{8}$/, '').replace(/-\d{4}-\d{2}-\d{2}$/, '').replace(/@.*$/, '');
   if (table[undated]) return undated;
+  // 前綴後面必須是分隔字元，避免 gpt-5.10 被當成 gpt-5.1、claude-opus-5-50 被當成 claude-opus-5-5
   let best = null;
-  for (const k of Object.keys(table)) if (undated.startsWith(k) && (!best || k.length > best.length)) best = k;
+  for (const k of Object.keys(table)) {
+    if (undated.startsWith(k) && /^[-_@:]/.test(undated.slice(k.length)) && (!best || k.length > best.length)) best = k;
+  }
   return best;
 }
 

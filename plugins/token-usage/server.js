@@ -7,7 +7,7 @@ const http = require('http');
 const os = require('os');
 const { execFile } = require('child_process');
 const https = require('https');
-const { REMOTE_URL, loadBundled, validatePriceFile, effectivePrices, matchModel } = require('./pricing');
+const { REMOTE_URL, TOOLS, loadBundled, validatePriceFile, validatePrice, effectivePrices, matchModel } = require('./pricing');
 
 const PUBLIC = path.join(__dirname, 'public');
 // 設定與通知狀態放在使用者目錄，plugin 更新時不會被覆蓋
@@ -103,6 +103,11 @@ function promptText(msg) {
   return text || null;
 }
 
+const USAGE_FIELDS = ['input', 'output', 'cacheWrite', 'cacheWrite1h', 'cacheRead', 'thinking'];
+function mergeUsage(target, other) {
+  for (const f of USAGE_FIELDS) target[f] = Math.max(target[f] || 0, other[f] || 0);
+}
+
 function parseFile(file) {
   const isSub = /[\\/]subagents[\\/]/.test(file);
   const calls = new Map(); // messageId -> call
@@ -120,30 +125,33 @@ function parseFile(file) {
     } else if (o.type === 'assistant' && o.message && o.message.usage) {
       const m = o.message;
       const key = (m.id || o.uuid) + '|' + (o.requestId || '');
+      const u = m.usage;
+      const usage = {
+        input: u.input_tokens || 0,
+        output: u.output_tokens || 0,
+        cacheWrite: u.cache_creation_input_tokens || 0,
+        cacheWrite1h: (u.cache_creation && u.cache_creation.ephemeral_1h_input_tokens) || 0,
+        cacheRead: u.cache_read_input_tokens || 0,
+        thinking: (u.output_tokens_details && u.output_tokens_details.thinking_tokens) || 0,
+      };
       let c = calls.get(key);
       if (!c) {
-        const u = m.usage;
-        const cc = u.cache_creation || {};
-        const cw = u.cache_creation_input_tokens || 0;
-        const cw1h = cc.ephemeral_1h_input_tokens || 0;
         c = {
           key,
           ts: Date.parse(o.timestamp) || 0,
           session: o.sessionId || path.basename(file, '.jsonl'),
           cwd: o.cwd || '',
           model: m.model || 'unknown',
-          input: u.input_tokens || 0,
-          output: u.output_tokens || 0,
-          cacheWrite: cw,
-          cacheWrite1h: cw1h,
-          cacheRead: u.cache_read_input_tokens || 0,
-          thinking: (u.output_tokens_details && u.output_tokens_details.thinking_tokens) || 0,
+          ...usage,
           fast: u.speed === 'fast',
           tools: [],
           sub: isSub || !!o.isSidechain,
           prompt: lastPrompt,
         };
         calls.set(key, c);
+      } else {
+        // 同一次回應可能被寫入多行：前面的行是串流中途的暫時用量，最後一行才是最終數字
+        mergeUsage(c, usage);
       }
       for (const b of m.content || []) if (b.type === 'tool_use') c.tools.push(b.name);
     }
@@ -166,16 +174,23 @@ function codexToolName(p) {
   return READ_CMD.test(cmd) ? name + ':read' : WRITE_CMD.test(cmd) ? name + ':write' : name;
 }
 
+const codexKey = (ts, total) => `codex@${ts}|${total}`;
+// 0.6.0 以前的 key 是 codex|<session>|<total>，載入舊的歷史檔時換成新格式，避免同一筆被算兩次
+function migrateKey(c) {
+  if (c.app === 'codex' && c.key.startsWith('codex|')) c.key = codexKey(c.ts, c.key.slice(c.key.lastIndexOf('|') + 1));
+  return c;
+}
+
 function parseCodexFile(file) {
   const calls = [];
-  let session = path.basename(file, '.jsonl'), cwd = '', model = 'unknown', prompt = '', lastTotal = -1, tools = [], limits = null;
+  let session = path.basename(file, '.jsonl'), cwd = '', model = 'unknown', prompt = '', lastTotal = -1, tools = [], limits = null, sawMeta = false;
   const raw = fs.readFileSync(file, 'utf8');
   for (const line of raw.split('\n')) {
     if (!line) continue;
     let o;
     try { o = JSON.parse(line); } catch { continue; }
     const p = o.payload || {};
-    if (o.type === 'session_meta') { session = p.id || session; cwd = p.cwd || cwd; }
+    if (o.type === 'session_meta') { if (!sawMeta) { session = p.id || session; cwd = p.cwd || cwd; sawMeta = true; } }
     else if (o.type === 'turn_context') { model = p.model || model; cwd = p.cwd || cwd; }
     else if (o.type === 'response_item' && (p.type === 'function_call' || p.type === 'custom_tool_call' || p.type === 'local_shell_call' || p.type === 'web_search_call')) {
       tools.push(codexToolName(p));
@@ -192,7 +207,7 @@ function parseCodexFile(file) {
       const u = info.last_token_usage;
       const cached = u.cached_input_tokens || 0;
       calls.push({
-        key: `codex|${session}|${total}`, app: 'codex',
+        key: codexKey(Date.parse(o.timestamp) || 0, total), app: 'codex',
         ts: Date.parse(o.timestamp) || 0, session, cwd, model,
         input: Math.max(0, (u.input_tokens || 0) - cached), output: u.output_tokens || 0,
         cacheWrite: 0, cacheWrite1h: 0, cacheRead: cached, thinking: u.reasoning_output_tokens || 0,
@@ -238,9 +253,16 @@ function fetchJson(url) {
     req.on('error', reject);
   });
 }
+// 只允許 https，或本機的 http（測試用）
+function allowedPriceUrl(u) {
+  try {
+    const x = new URL(u);
+    return x.protocol === 'https:' || (x.protocol === 'http:' && ['127.0.0.1', 'localhost'].includes(x.hostname));
+  } catch { return false; }
+}
 // 每 24 小時最多下載一次；force 時立即下載
 async function checkRemotePrices(force) {
-  if (!config.remotePrices || !/^(https:\/\/|http:\/\/(127\.0\.0\.1|localhost)[:/])/.test(config.remotePricesUrl || '')) return;
+  if (!config.remotePrices || !allowedPriceUrl(config.remotePricesUrl)) return;
   if (!force && Date.now() - remoteState.lastCheck < 24 * 3600e3) return;
   remoteState.lastCheck = Date.now();
   try {
@@ -257,6 +279,7 @@ async function checkRemotePrices(force) {
     }
   } catch (e) {
     remoteState.error = e.message;
+    remoteState.lastCheck = Date.now() - 23 * 3600e3; // 約 1 小時後再試
     console.error('下載價格表失敗：', e.message);
   }
   try { fs.writeFileSync(REMOTE_STATE_PATH, JSON.stringify(remoteState)); } catch { /* ignore */ }
@@ -325,7 +348,7 @@ function decodeDevice(d) {
     key: r[0], ts: r[1], session: d.sessions[r[2]], cwd: d.cwds[r[3]], model: d.models[r[4]],
     input: r[5], output: r[6], cacheWrite: r[7], cacheWrite1h: r[8], cacheRead: r[9], thinking: r[10],
     tools: r[11] ? r[11].split(',') : [], sub: !!r[12], prompt: d.prompts[r[13]], app: APPS[r[14] || 0], fast: !!r[15],
-  }));
+  })).map(migrateKey);
   return { device: d.device, updatedAt: d.updatedAt, calls, titles: d.titles || {} };
 }
 function readJson(p) { try { return JSON.parse(fs.readFileSync(p, 'utf8')); } catch { return null; } }
@@ -405,7 +428,12 @@ function buildDataset() {
     try {
       const parsed = codexSet.has(f) ? parseCodexFile(f) : parseFile(f);
       fileCache.set(f, { mtimeMs: st.mtimeMs, size: st.size, limits: parsed.limits });
-      for (const c of parsed.calls) archive.set(c.key, c);
+      // 同一次呼叫可能出現在多個檔案（例如接續的 session 會複製先前的對話）；用量取各欄位最大值
+      for (const c of parsed.calls) {
+        const prev = archive.get(c.key);
+        if (prev) mergeUsage(c, prev);
+        archive.set(c.key, c);
+      }
       Object.assign(archiveTitles, parsed.titles);
       changed = true; archiveDirty = true;
     } catch (e) { console.error('解析失敗', f, e.message); }
@@ -422,7 +450,11 @@ function buildDataset() {
     ...remote.list];
   const titles = {};
   const all = [];
-  devices.forEach((d, di) => { Object.assign(titles, d.titles); for (const c of d.calls) all.push([c, di]); });
+  const seenKeys = new Set();
+  devices.forEach((d, di) => {
+    Object.assign(titles, d.titles);
+    for (const c of d.calls) { if (seenKeys.has(c.key)) continue; seenKeys.add(c.key); all.push([c, di]); }
+  });
   all.sort((a, b) => a[0].ts - b[0].ts);
 
   const sessions = indexer(), projects = indexer(), models = indexer(), prompts = indexer();
@@ -433,7 +465,7 @@ function buildDataset() {
   const rows = all.map(([c, di]) => {
     const si = sessions.get(c.session);
     const cwd0 = firstCwd[c.session] || '';
-    const pi = projects.get(cwd0 ? path.basename(cwd0) || cwd0 : '(未知)');
+    const pi = projects.get(cwd0 ? cwd0.split(/[\\/]/).filter(Boolean).pop() || cwd0 : '(未知)');
     if (!sessionInfo[si]) sessionInfo[si] = { id: c.session, title: titles[c.session] || '', project: pi, cwd: cwd0, device: di };
     const scen = c.tools.length ? classifyTool(c.tools[0]) : 7;
     const app = c.app || 'claude';
@@ -500,21 +532,22 @@ function checkAlerts(ds) {
     if (t.contextTokens && ctx >= t.contextTokens) fire(`ctx|${s.id}`, '上下文接近上限', `${s.title || s.id.slice(0, 8)}：目前上下文 ${fmtTok(ctx)} tokens`);
   }
   // 清掉 3 天前的記錄
-  for (const [k, v] of Object.entries(alertState)) if (now - v > 3 * 86400e3) delete alertState[k];
+  for (const [k, v] of Object.entries(alertState)) if (now - v > 30 * 86400e3) delete alertState[k];
   try { fs.writeFileSync(ALERT_STATE_PATH, JSON.stringify(alertState)); } catch { /* ignore */ }
 }
 
-function toast(title, body) {
-  const esc = s => String(s).replace(/'/g, "''");
-  const ps = `
+// 標題與內文（可能含 session 標題等外部文字）只經由環境變數傳入，不拼進 PowerShell 指令
+const TOAST_PS = `
 [Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime] > $null
 $x = [Windows.UI.Notifications.ToastNotificationManager]::GetTemplateContent([Windows.UI.Notifications.ToastTemplateType]::ToastText02)
 $t = $x.GetElementsByTagName('text')
-$t.Item(0).AppendChild($x.CreateTextNode('${esc(title)}')) > $null
-$t.Item(1).AppendChild($x.CreateTextNode('${esc(body)}')) > $null
+$t.Item(0).AppendChild($x.CreateTextNode($env:TU_TOAST_TITLE)) > $null
+$t.Item(1).AppendChild($x.CreateTextNode($env:TU_TOAST_BODY)) > $null
 $n = [Windows.UI.Notifications.ToastNotification]::new($x)
 [Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier('{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}\\WindowsPowerShell\\v1.0\\powershell.exe').Show($n)`;
-  execFile('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', ps], { windowsHide: true }, err => {
+function toast(title, body) {
+  const env = { ...process.env, TU_TOAST_TITLE: String(title).slice(0, 200), TU_TOAST_BODY: String(body).slice(0, 500) };
+  execFile('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', TOAST_PS], { windowsHide: true, env }, err => {
     if (err) console.error('Windows 通知失敗：', err.message);
   });
 }
@@ -537,7 +570,21 @@ function send(res, code, body, type = 'application/json; charset=utf-8') {
   res.end(typeof body === 'string' || Buffer.isBuffer(body) ? body : JSON.stringify(body));
 }
 
+// 只接受本機的請求：Host 必須是 localhost / 127.0.0.1（擋 DNS rebinding），
+// 會修改狀態的 POST 若帶 Origin，必須是儀表板自己（擋其他網頁的跨站請求）；CLI 不帶 Origin。
+function allowedRequest(req) {
+  const hosts = [`localhost:${config.port}`, `127.0.0.1:${config.port}`, `[::1]:${config.port}`];
+  if (!hosts.includes(String(req.headers.host || '').toLowerCase())) return false;
+  if (req.method !== 'GET' && req.method !== 'HEAD') {
+    const origin = req.headers.origin;
+    if (origin && !hosts.some(h => origin.toLowerCase() === `http://${h}`)) return false;
+    if (req.headers['sec-fetch-site'] && !['same-origin', 'none'].includes(req.headers['sec-fetch-site'])) return false;
+  }
+  return true;
+}
+
 const server = http.createServer((req, res) => {
+  if (!allowedRequest(req)) return send(res, 403, { error: 'forbidden' });
   const url = new URL(req.url, 'http://localhost');
   if (url.pathname === '/api/data') {
     refresh();
@@ -565,9 +612,30 @@ const server = http.createServer((req, res) => {
     req.on('end', () => {
       try {
         const patch = JSON.parse(body);
-        const next = { ...config };
-        if (patch.thresholds) next.thresholds = { ...config.thresholds, ...patch.thresholds };
-        if (patch.priceOverrides && typeof patch.priceOverrides === 'object') next.priceOverrides = patch.priceOverrides;
+        if (!patch || typeof patch !== 'object' || Array.isArray(patch)) throw new Error('設定必須是 JSON 物件');
+        // 以磁碟上最新的設定為基礎（prices.js 等外部工具可能剛改過），只套用這次送來的欄位
+        const next = loadConfig();
+        if (patch.thresholds && typeof patch.thresholds === 'object') {
+          const th = { ...next.thresholds };
+          for (const [k, v] of Object.entries(patch.thresholds)) if (k in th && Number.isFinite(+v) && +v >= 0) th[k] = +v;
+          next.thresholds = th;
+        }
+        // { 工具: { 模型: 價格物件 | null } }；null 代表刪除自訂（回到官方價格）
+        if (patch.priceOverridesPatch && typeof patch.priceOverridesPatch === 'object') {
+          const ov = JSON.parse(JSON.stringify(next.priceOverrides || {}));
+          for (const [tool, models] of Object.entries(patch.priceOverridesPatch)) {
+            if (!TOOLS.includes(tool) || !models || typeof models !== 'object') throw new Error('未知的工具：' + tool);
+            ov[tool] = ov[tool] || {};
+            for (const [m, p] of Object.entries(models)) {
+              if (p === null) { delete ov[tool][m]; continue; }
+              const err = validatePrice(p);
+              if (err) throw new Error(`${tool}/${m}：${err}`);
+              const { source, updatedAt, sourceUrl, ...clean } = p; // eslint-disable-line no-unused-vars
+              ov[tool][m] = clean; // 使用者手動輸入，一律視為自訂
+            }
+          }
+          next.priceOverrides = ov;
+        }
         if (typeof patch.windowsToast === 'boolean') next.windowsToast = patch.windowsToast;
         if (typeof patch.remotePrices === 'boolean') next.remotePrices = patch.remotePrices;
         if (typeof patch.deviceName === 'string') next.deviceName = patch.deviceName.trim().slice(0, 60);
@@ -591,7 +659,7 @@ const server = http.createServer((req, res) => {
 
   const rel = url.pathname === '/' ? 'index.html' : url.pathname.slice(1);
   const file = path.normalize(path.join(PUBLIC, rel));
-  if (!file.startsWith(PUBLIC)) return send(res, 403, 'forbidden', 'text/plain');
+  if (!file.startsWith(PUBLIC + path.sep)) return send(res, 403, 'forbidden', 'text/plain');
   fs.readFile(file, (err, buf) => {
     if (err) return send(res, 404, 'not found', 'text/plain');
     send(res, 200, buf, MIME[path.extname(file)] || 'application/octet-stream');
@@ -601,7 +669,7 @@ const server = http.createServer((req, res) => {
 refresh();
 setInterval(refresh, config.refreshSeconds * 1000);
 checkRemotePrices(false);
-setInterval(() => checkRemotePrices(false), 6 * 3600e3);
+setInterval(() => checkRemotePrices(false), 3600e3); // 每小時看一次是否到了下載時間
 server.on('error', e => {
   console.error(e.code === 'EADDRINUSE' ? `連接埠 ${config.port} 已被占用，請在 ${CONFIG_PATH} 修改 port` : e.message);
   process.exit(1);

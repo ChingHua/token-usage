@@ -4,6 +4,7 @@
 //   node start.js --background  只在背景啟動，不開瀏覽器、不輸出（給 SessionStart hook 用）
 //   node start.js --stop     停止伺服器
 //   node start.js --status   顯示狀態
+//   node start.js --url      只印出儀表板網址
 'use strict';
 const fs = require('fs');
 const os = require('os');
@@ -39,6 +40,7 @@ function openBrowser() {
 }
 
 (async () => {
+  if (args.has('--url')) return console.log(url); // 給 skill 用：取得儀表板網址（依設定檔的 port）
   const running = await ping();
 
   if (args.has('--status')) {
