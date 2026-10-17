@@ -191,7 +191,13 @@
       </div>
       <div class="card span2">
         <div class="card-h"><h2>模型價格</h2><span class="muted" id="priceMeta"></span></div>
-        <p class="muted small">美元 / 百萬 token。每個工具只用自己的價格表；模型名稱完全相同優先，其次是同系列前綴。「官方」來自官方價目表，「估計」是官方已不列出、沿用同代模型的價格，「自訂」是你改過的值。花費都是依 API 價格換算的估計，不是訂閱方案的實際帳單。</p>
+        <p class="muted small">美元 / 百萬 token。每個工具只用自己的價格表；模型名稱完全相同優先，其次是同系列前綴。「官方」來自官方價目表，「估計」是官方已不列出、沿用同代模型的價格，「AI 更新」是你請 AI 依官方價目查到的價格，「自訂」是你手動改過的值。花費都是依 API 價格換算的估計，不是訂閱方案的實際帳單。</p>
+        <div class="row">
+          <label class="check"><input type="checkbox" id="remotePrices"> 每天從 GitHub 下載最新的官方價格表</label>
+          <button type="button" id="checkPrices" class="ghost">立即檢查</button>
+          <span id="remoteMsg" class="muted small"></span>
+        </div>
+        <p class="muted small">有新模型沒有價格，或想確認價格是否最新時，可以對 Claude Code 或 Codex 說「<b>更新模型價格</b>」，它會讀官方價目表、列出差異，經你確認後才寫入。</p>
         <div id="priceTables"></div>
         <div class="row"><button id="savePricing">儲存價格</button><span id="prMsg" class="muted small"></span></div>
       </div>

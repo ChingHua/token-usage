@@ -118,12 +118,25 @@ codex plugin add token-usage@ai-usage-tools
 
 ## 模型價格
 
-Claude Code 和 Codex 各有自己的價格表（[pricing.js](plugins/token-usage/pricing.js)），每個模型分別設定輸入、輸出、快取讀取、快取寫入（Claude）、長上下文價格；Claude Opus 的快速模式套用 2 倍價格。
+Claude Code 和 Codex 各有自己的價格表（[prices.json](plugins/token-usage/prices.json)），每個模型分別設定輸入、輸出、快取讀取、快取寫入（Claude）、長上下文價格；Claude Opus 的快速模式套用 2 倍價格。
 
-- 預設價格取自官方價目表（[Claude](https://claude.com/pricing#api)、[OpenAI](https://developers.openai.com/api/docs/pricing)），更新日期寫在 `PRICES_UPDATED`。官方已不列出的舊 Codex 模型標為「估計」，沿用同代模型的價格。
+- 價格取自官方價目表（[Claude](https://platform.claude.com/docs/en/about-claude/pricing)、[OpenAI](https://developers.openai.com/api/docs/pricing)）。官方已不列出的舊 Codex 模型標為「估計」，沿用同代模型的價格。
 - 比對順序：模型名稱完全相同 → 去掉日期後綴 → 同系列最長前綴，而且只在所屬工具的表裡比對。都找不到的模型標為「未定價」，花費不計入，畫面上方會提示。
-- 在「通知與設定」→「模型價格」可以直接修改或新增模型，改過的標為「自訂」，可以按「還原」回到官方價格。自訂價格存在 `config.json` 的 `priceOverrides`，更新版本時不會被覆蓋。
 - 花費一律依 API 價格換算。如果你用的是訂閱方案（Claude Pro / Max、ChatGPT Plus / Pro 等），這是「等值 API 費用」，不是實際帳單。
+
+### 價格怎麼保持最新
+
+價格有三個來源，後面的優先：
+
+| 來源 | 標示 | 怎麼來的 |
+|---|---|---|
+| 官方價格表 | 官方 / 估計 | plugin 內建的 `prices.json`。儀表板**每天自動從 GitHub 下載最新版**，作者更新價格後，使用者不用更新 plugin 就會用到。 |
+| AI 更新 | AI 更新 | 你對 Claude Code 或 Codex 說「**更新模型價格**」，它會讀官方價目表、列出差異，**經你確認後才寫入**。官方價格表之後更新到比它新的日期時，會自動改回官方價格。 |
+| 自訂 | 自訂 | 你在「通知與設定」→「模型價格」手動修改或新增的價格，一律優先，不會被自動更新或 AI 覆蓋。可以按「還原」回到官方價格。 |
+
+- 出現未定價的新模型，或價格表超過 30 天沒更新時，儀表板上方會提醒你可以請 AI 更新。不會自動呼叫 AI，也不會自動花 token。
+- 不想連網下載價格表的話，在「模型價格」取消勾選「每天從 GitHub 下載最新的官方價格表」，或在 `config.json` 設 `"remotePrices": false`。下載只是讀取一個公開檔案，不會傳送任何資料。
+- AI 更新與自訂價格存在 `config.json` 的 `priceOverrides`，更新版本時不會被覆蓋。
 
 ## 多裝置同步（OneDrive）
 
@@ -141,7 +154,7 @@ Claude Code 和 Codex 各有自己的價格表（[pricing.js](plugins/token-usag
 
 ## 隱私
 
-- 所有資料都在你的電腦上處理。儀表板伺服器只監聽 `127.0.0.1`，不會連到任何外部服務（只有網頁會從 cdnjs 載入圖表函式庫 Chart.js）。
+- 所有資料都在你的電腦上處理。儀表板伺服器只監聽 `127.0.0.1`。對外連線只有兩個，而且都只是下載、不會傳送你的資料：網頁從 cdnjs 載入圖表函式庫 Chart.js；伺服器每天從 GitHub 下載一次價格表（可以關閉）。
 - 只取用對話紀錄裡的 token 數、模型、時間、工具名稱、專案資料夾名稱、session 標題與每次提問的前 160 字。
 - 用量歷史存在 `~/.claude-token-usage/`；啟用多裝置同步時，會寫到你指定的資料夾。這些檔案含有提問片段，不要分享給別人。
 
@@ -155,7 +168,8 @@ Claude Code 和 Codex 各有自己的價格表（[pricing.js](plugins/token-usag
 | `projectsDir` | Claude Code 紀錄位置 |
 | `codexDir` | Codex 資料夾位置 |
 | `thresholds` | 通知門檻（也可以在儀表板修改） |
-| `priceOverrides` | 自訂模型價格（也可以在儀表板修改） |
+| `priceOverrides` | AI 更新與自訂的模型價格（也可以在儀表板修改） |
+| `remotePrices`、`remotePricesUrl` | 是否每天下載最新價格表、下載位址 |
 | `syncDir`、`deviceName` | 多裝置同步 |
 | `windowsToast` | 是否顯示 Windows 系統通知 |
 
@@ -172,10 +186,13 @@ plugins/token-usage/
 ├── .claude-plugin/plugin.json   # Claude Code plugin 設定
 ├── .codex-plugin/plugin.json    # Codex plugin 設定
 ├── commands/                    # Claude Code 的 /token-usage 指令
-├── skills/usage-query/          # 兩種工具共用的 skill
+├── skills/usage-query/          # 開啟儀表板、查詢用量（兩種工具共用）
+├── skills/update-prices/        # 「更新模型價格」（兩種工具共用）
 ├── hooks/                       # Claude Code 啟動時自動執行（Codex 不支援 plugin hook）
 ├── scripts/start.js             # 啟動 / 停止伺服器
-├── server.js, pricing.js        # 伺服器、價格表
+├── scripts/prices.js            # 價格工具：show / apply / promote
+├── prices.json                  # 官方價格表（使用者每天從 GitHub 下載這個檔案）
+├── server.js, pricing.js        # 伺服器、價格合併與比對
 └── public/                      # 儀表板網頁
 .claude-plugin/marketplace.json  # Claude Code 市集
 .agents/plugins/marketplace.json # Codex 市集
@@ -185,6 +202,12 @@ plugins/token-usage/
 node plugins/token-usage/server.js   # 前景執行伺服器
 claude plugin validate .             # 驗證 Claude Code 市集與 plugin
 ```
+
+更新價格表（不用發佈新版本）：
+
+1. 在這個倉庫裡，對 Claude Code 或 Codex 說「更新模型價格」，確認後它會寫成「AI 更新」。
+2. 執行 `node plugins/token-usage/scripts/prices.js promote`，把 AI 更新併進 `prices.json`（日期改成今天）。
+3. 檢查 `git diff`，commit 並 push 到 `main`。使用者的儀表板會在一天內自動下載。
 
 發佈新版時：
 

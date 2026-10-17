@@ -6,7 +6,8 @@ const path = require('path');
 const http = require('http');
 const os = require('os');
 const { execFile } = require('child_process');
-const { PRICES_UPDATED, SOURCES, DEFAULT_PRICES, effectivePrices, matchModel } = require('./pricing');
+const https = require('https');
+const { REMOTE_URL, loadBundled, validatePriceFile, effectivePrices, matchModel } = require('./pricing');
 
 const PUBLIC = path.join(__dirname, 'public');
 // 設定與通知狀態放在使用者目錄，plugin 更新時不會被覆蓋
@@ -25,6 +26,8 @@ const DEFAULT_CONFIG = {
   deviceName: '',         // 顯示用的裝置名稱，空白時用電腦名稱
   // 各模型價格的預設值在 pricing.js；這裡只存使用者自訂的價格：{ claude: { 模型: {...} }, codex: {...} }
   priceOverrides: {},
+  remotePrices: true,     // 每天從 GitHub 下載最新的價格表（只下載檔案，不會傳送任何資料）
+  remotePricesUrl: REMOTE_URL,
   cacheMultipliers: { write5m: 1.25, write1h: 2 }, // 模型沒有指定快取寫入價格時，以輸入價格乘上這個倍率
   thresholds: {
     dailyCost: 50,          // 今日估算花費（USD）
@@ -203,7 +206,61 @@ function parseCodexFile(file) {
 
 // ---------- 價格 ----------
 // 每個工具有自己的價格表，模型只在所屬工具的表裡比對。
-let prices = effectivePrices(config.priceOverrides);
+// 基準價格表：plugin 內建的 prices.json，或從 GitHub 下載、日期較新的版本。
+const REMOTE_CACHE_PATH = path.join(DATA_DIR, 'prices-remote.json');
+const REMOTE_STATE_PATH = path.join(DATA_DIR, 'prices-remote-state.json');
+let priceBase = loadBundled();
+let priceBaseSource = 'bundled';
+let remoteState = { lastCheck: 0, error: '' };
+try { remoteState = { ...remoteState, ...JSON.parse(fs.readFileSync(REMOTE_STATE_PATH, 'utf8')) }; } catch { /* 首次執行 */ }
+try {
+  const cached = JSON.parse(fs.readFileSync(REMOTE_CACHE_PATH, 'utf8'));
+  if (!validatePriceFile(cached) && cached.updated >= priceBase.updated) { priceBase = cached; priceBaseSource = 'remote'; }
+} catch { /* 沒有快取 */ }
+let prices = effectivePrices(priceBase, config.priceOverrides);
+function refreshPrices() {
+  prices = effectivePrices(priceBase, config.priceOverrides);
+  priceMatchCache.clear();
+  dataset = null; // 重新計算花費
+}
+
+function fetchJson(url) {
+  return new Promise((resolve, reject) => {
+    const mod = url.startsWith('https:') ? https : http; // http 只允許本機（測試用）
+    const req = mod.get(url, { timeout: 10000, headers: { 'User-Agent': 'token-usage-dashboard' } }, res => {
+      if (res.statusCode !== 200) { res.resume(); return reject(new Error(`HTTP ${res.statusCode}`)); }
+      let body = '';
+      res.setEncoding('utf8');
+      res.on('data', d => { body += d; if (body.length > 1e6) req.destroy(new Error('檔案過大')); });
+      res.on('end', () => { try { resolve(JSON.parse(body)); } catch (e) { reject(new Error('不是有效的 JSON')); } });
+    });
+    req.on('timeout', () => req.destroy(new Error('連線逾時')));
+    req.on('error', reject);
+  });
+}
+// 每 24 小時最多下載一次；force 時立即下載
+async function checkRemotePrices(force) {
+  if (!config.remotePrices || !/^(https:\/\/|http:\/\/(127\.0\.0\.1|localhost)[:/])/.test(config.remotePricesUrl || '')) return;
+  if (!force && Date.now() - remoteState.lastCheck < 24 * 3600e3) return;
+  remoteState.lastCheck = Date.now();
+  try {
+    const d = await fetchJson(config.remotePricesUrl);
+    const err = validatePriceFile(d);
+    if (err) throw new Error('價格檔格式錯誤：' + err);
+    fs.writeFileSync(REMOTE_CACHE_PATH, JSON.stringify(d));
+    remoteState.error = '';
+    // 日期較新、或同一天但內容不同（維護者同一天更新了兩次）就改用下載的版本
+    if (d.updated > priceBase.updated || (d.updated === priceBase.updated && JSON.stringify(d.models) !== JSON.stringify(priceBase.models))) {
+      priceBase = d; priceBaseSource = 'remote';
+      refreshPrices();
+      console.log(`已更新價格表（${d.updated}）`);
+    }
+  } catch (e) {
+    remoteState.error = e.message;
+    console.error('下載價格表失敗：', e.message);
+  }
+  try { fs.writeFileSync(REMOTE_STATE_PATH, JSON.stringify(remoteState)); } catch { /* ignore */ }
+}
 const priceMatchCache = new Map(); // `${app}|${model}` -> 價格表 key 或 null
 function priceKeyFor(app, model) {
   const k = `${app}|${model}`;
@@ -467,6 +524,12 @@ function refresh() {
 }
 
 // ---------- HTTP ----------
+const priceView = () => ({
+  updated: priceBase.updated, baseSource: priceBaseSource, sources: priceBase.sources,
+  defaults: priceBase.models, overrides: config.priceOverrides, effective: prices,
+  remote: { enabled: !!config.remotePrices, url: config.remotePricesUrl, lastCheck: remoteState.lastCheck, error: remoteState.error },
+  staleDays: Math.floor((Date.now() - Date.parse(priceBase.updated)) / 864e5),
+});
 const configView = () => ({ ...config, deviceId, deviceNameResolved: deviceName(), detectedOneDrive: detectOneDrive(), syncError });
 const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8' };
 function send(res, code, body, type = 'application/json; charset=utf-8') {
@@ -483,7 +546,17 @@ const server = http.createServer((req, res) => {
     return send(res, 200, dataset);
   }
   if (url.pathname === '/api/ping') return send(res, 200, { app: 'claude-token-usage', pid: process.pid });
-  if (url.pathname === '/api/prices') return send(res, 200, { updated: PRICES_UPDATED, sources: SOURCES, defaults: DEFAULT_PRICES, overrides: config.priceOverrides, effective: prices });
+  if (url.pathname === '/api/prices') return send(res, 200, priceView());
+  if (url.pathname === '/api/prices/check' && req.method === 'POST') {
+    checkRemotePrices(true).then(() => send(res, 200, priceView()));
+    return;
+  }
+  // prices.js CLI 直接改了 config.json 之後呼叫這個，讓伺服器重新讀取
+  if (url.pathname === '/api/reload' && req.method === 'POST') {
+    config = loadConfig();
+    refreshPrices();
+    return send(res, 200, { ok: true });
+  }
   if (url.pathname === '/api/alerts') return send(res, 200, { alerts: alertLog });
   if (url.pathname === '/api/config' && req.method === 'GET') return send(res, 200, configView());
   if (url.pathname === '/api/config' && req.method === 'POST') {
@@ -496,6 +569,7 @@ const server = http.createServer((req, res) => {
         if (patch.thresholds) next.thresholds = { ...config.thresholds, ...patch.thresholds };
         if (patch.priceOverrides && typeof patch.priceOverrides === 'object') next.priceOverrides = patch.priceOverrides;
         if (typeof patch.windowsToast === 'boolean') next.windowsToast = patch.windowsToast;
+        if (typeof patch.remotePrices === 'boolean') next.remotePrices = patch.remotePrices;
         if (typeof patch.deviceName === 'string') next.deviceName = patch.deviceName.trim().slice(0, 60);
         if (typeof patch.syncDir === 'string') {
           const dir = patch.syncDir.trim();
@@ -505,7 +579,7 @@ const server = http.createServer((req, res) => {
         }
         fs.writeFileSync(CONFIG_PATH, JSON.stringify(next, null, 2));
         config = next;
-        prices = effectivePrices(config.priceOverrides); priceMatchCache.clear();
+        refreshPrices();
         dataset = null; fileCache.clear(); // 價格可能變了，重新計算
         refresh();
         send(res, 200, configView());
@@ -526,6 +600,8 @@ const server = http.createServer((req, res) => {
 
 refresh();
 setInterval(refresh, config.refreshSeconds * 1000);
+checkRemotePrices(false);
+setInterval(() => checkRemotePrices(false), 6 * 3600e3);
 server.on('error', e => {
   console.error(e.code === 'EADDRINUSE' ? `連接埠 ${config.port} 已被占用，請在 ${CONFIG_PATH} 修改 port` : e.message);
   process.exit(1);

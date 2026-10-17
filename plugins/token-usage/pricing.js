@@ -1,72 +1,71 @@
-// 各工具、各模型的預設價格（美元 / 百萬 token）。
-// 欄位：input 輸入、output 輸出、cacheRead 快取讀取（OpenAI 的 cached input）、
-//       cacheWrite5m / cacheWrite1h 快取寫入（只有 Claude；省略時用 input×1.25 / ×2）、
-//       long 長上下文價格（提示 token 超過 threshold 時整次呼叫改用這組價格）、
-//       fast 快速模式倍率、source 'official' 官方價目 / 'estimate' 官方未列出，沿用同代模型。
+// 模型價格：資料在 prices.json（美元 / 百萬 token），這裡負責驗證、合併與比對。
+//
+// 每個模型的欄位：
+//   input 輸入、output 輸出、cacheRead 快取讀取（OpenAI 的 cached input）、
+//   cacheWrite5m / cacheWrite1h 快取寫入（只有 Claude；省略時用 input×1.25 / ×2）、
+//   long 長上下文價格（提示 token 超過 threshold 時整次呼叫改用這組價格）、
+//   fast 快速模式倍率、
+//   source 'official' 官方價目 / 'estimate' 官方未列出，沿用同代模型。
+//
+// 價格的三個來源，後者覆蓋前者：
+//   1. 基準價格表：plugin 內建的 prices.json，或每天從 GitHub 下載的較新版本
+//   2. AI 更新：使用者用「更新模型價格」skill 寫入的價格（source 'ai'）。
+//      基準價格表更新到比它新的日期時，AI 更新就自動退場，改用基準價格。
+//   3. 自訂：使用者在儀表板手動改的價格（source 'custom'），一律優先。
+//
 // 比對方式：模型名稱完全相同 → 去掉日期後綴 → 最長的前綴相符；都找不到就列為「未定價」。
 'use strict';
+const fs = require('fs');
+const path = require('path');
 
-const PRICES_UPDATED = '2026-10-17';
-const SOURCES = {
-  claude: 'https://claude.com/pricing#api',
-  codex: 'https://developers.openai.com/api/docs/pricing',
-};
+const BUNDLED_PATH = path.join(__dirname, 'prices.json');
+const REMOTE_URL = 'https://raw.githubusercontent.com/ChingHua/token-usage/main/plugins/token-usage/prices.json';
+const TOOLS = ['claude', 'codex'];
+const PRICE_FIELDS = ['input', 'output', 'cacheRead', 'cacheWrite5m', 'cacheWrite1h'];
 
-const DEFAULT_PRICES = {
-  claude: {
-    'claude-fable-5-1': { input: 10, output: 50, cacheRead: 0.25, source: 'official' },
-    'claude-mythos-5-1': { input: 10, output: 50, cacheRead: 0.25, source: 'official' },
-    'claude-fable-5': { input: 10, output: 50, cacheRead: 1, source: 'official' },
-    'claude-mythos-5': { input: 10, output: 50, cacheRead: 1, source: 'official' },
-    'claude-opus-5-5': { input: 4, output: 20, cacheRead: 0.2, fast: 2, source: 'official' },
-    'claude-opus-5': { input: 5, output: 25, cacheRead: 0.5, fast: 2, source: 'official' },
-    'claude-opus-4-8': { input: 5, output: 25, cacheRead: 0.5, source: 'official' },
-    'claude-opus-4-7': { input: 5, output: 25, cacheRead: 0.5, source: 'official' },
-    'claude-opus-4-6': { input: 5, output: 25, cacheRead: 0.5, source: 'official' },
-    'claude-sonnet-5-5': { input: 2, output: 10, cacheRead: 0.2, source: 'official' },
-    'claude-sonnet-5': { input: 2, output: 10, cacheRead: 0.2, source: 'official' },
-    'claude-sonnet-4-6': { input: 3, output: 15, cacheRead: 0.3, source: 'official' },
-    'claude-haiku-5-5': { input: 0.1, output: 0.5, cacheRead: 0.01, long: { threshold: 100000, input: 0.5, output: 2.5, cacheRead: 0.05 }, source: 'official' },
-    'claude-haiku-4-5': { input: 1, output: 5, cacheRead: 0.1, source: 'official' },
-  },
-  codex: {
-    'gpt-5.6-sol': { input: 4, output: 20, cacheRead: 0.4, long: { threshold: 272000, input: 8, output: 30, cacheRead: 0.8 }, source: 'official' },
-    'gpt-5.6-terra': { input: 2, output: 12, cacheRead: 0.2, long: { threshold: 272000, input: 4, output: 18, cacheRead: 0.4 }, source: 'official' },
-    'gpt-5.6-luna': { input: 0.2, output: 1.2, cacheRead: 0.02, long: { threshold: 272000, input: 0.4, output: 1.8, cacheRead: 0.04 }, source: 'official' },
-    'gpt-5.5': { input: 5, output: 30, cacheRead: 0.5, long: { threshold: 272000, input: 10, output: 45, cacheRead: 1 }, source: 'official' },
-    'gpt-5.5-pro': { input: 30, output: 180, cacheRead: 30, long: { threshold: 272000, input: 60, output: 270, cacheRead: 60 }, source: 'official' },
-    'gpt-5.4': { input: 2.5, output: 15, cacheRead: 0.25, long: { threshold: 272000, input: 5, output: 22.5, cacheRead: 0.5 }, source: 'official' },
-    'gpt-5.4-pro': { input: 30, output: 180, cacheRead: 30, long: { threshold: 272000, input: 60, output: 270, cacheRead: 60 }, source: 'official' },
-    'gpt-5.4-mini': { input: 0.75, output: 4.5, cacheRead: 0.075, source: 'official' },
-    'gpt-5.4-nano': { input: 0.2, output: 1.25, cacheRead: 0.02, source: 'official' },
-    'gpt-5.3-codex': { input: 1.75, output: 14, cacheRead: 0.175, source: 'official' },
-    'gpt-5.2': { input: 1.75, output: 14, cacheRead: 0.175, source: 'official' },
-    'gpt-5.2-pro': { input: 21, output: 168, cacheRead: 21, source: 'official' },
-    'gpt-5.2-codex': { input: 1.75, output: 14, cacheRead: 0.175, source: 'estimate' },
-    'gpt-5.1': { input: 1.25, output: 10, cacheRead: 0.125, source: 'official' },
-    'gpt-5.1-codex': { input: 1.25, output: 10, cacheRead: 0.125, source: 'estimate' },
-    'gpt-5.1-codex-max': { input: 1.25, output: 10, cacheRead: 0.125, source: 'estimate' },
-    'gpt-5.1-codex-mini': { input: 0.25, output: 2, cacheRead: 0.025, source: 'estimate' },
-    'gpt-5': { input: 1.25, output: 10, cacheRead: 0.125, source: 'official' },
-    'gpt-5-codex': { input: 1.25, output: 10, cacheRead: 0.125, source: 'estimate' },
-    'gpt-5-mini': { input: 0.25, output: 2, cacheRead: 0.025, source: 'official' },
-    'gpt-5-nano': { input: 0.05, output: 0.4, cacheRead: 0.005, source: 'official' },
-    'codex-mini-latest': { input: 1.5, output: 6, cacheRead: 0.375, source: 'estimate' },
-    'o3': { input: 2, output: 8, cacheRead: 0.5, source: 'official' },
-    'o4-mini': { input: 1.1, output: 4.4, cacheRead: 0.275, source: 'official' },
-    'gpt-4.1': { input: 2, output: 8, cacheRead: 0.5, source: 'official' },
-  },
-};
+// 檢查價格檔格式；回傳錯誤訊息，沒問題時回傳 null
+function validatePriceFile(d) {
+  if (!d || d.schema !== 1) return 'schema 不是 1';
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(d.updated || '')) return 'updated 日期格式錯誤';
+  if (!d.models || typeof d.models !== 'object') return '缺少 models';
+  for (const tool of TOOLS) {
+    const t = d.models[tool];
+    if (!t || typeof t !== 'object') return `缺少 models.${tool}`;
+    for (const [m, p] of Object.entries(t)) {
+      const err = validatePrice(p);
+      if (err) return `${tool}/${m}：${err}`;
+    }
+  }
+  return null;
+}
+function validatePrice(p) {
+  if (!p || typeof p !== 'object') return '不是物件';
+  for (const f of ['input', 'output']) if (typeof p[f] !== 'number') return `缺少 ${f}`;
+  for (const f of PRICE_FIELDS) {
+    if (p[f] != null && (typeof p[f] !== 'number' || !(p[f] >= 0) || p[f] > 10000)) return `${f} 不合理：${p[f]}`;
+  }
+  if (p.long) {
+    if (!(p.long.threshold > 0)) return 'long.threshold 不合理';
+    for (const f of ['input', 'output', 'cacheRead']) if (p.long[f] != null && !(p.long[f] >= 0 && p.long[f] <= 10000)) return `long.${f} 不合理`;
+  }
+  if (p.fast != null && !(p.fast >= 1 && p.fast <= 10)) return 'fast 倍率不合理';
+  return null;
+}
 
-// 合併預設價格與使用者自訂（overrides[tool][model] 完整取代該模型；值為 null 代表刪除）
-function effectivePrices(overrides = {}) {
+function loadBundled() {
+  return JSON.parse(fs.readFileSync(BUNDLED_PATH, 'utf8'));
+}
+
+// base：基準價格檔（prices.json 的內容）；overrides：config.priceOverrides
+function effectivePrices(base, overrides = {}) {
   const out = {};
-  for (const tool of Object.keys(DEFAULT_PRICES)) {
+  for (const tool of TOOLS) {
     out[tool] = {};
-    for (const [m, p] of Object.entries(DEFAULT_PRICES[tool])) out[tool][m] = { ...p };
-    for (const [m, p] of Object.entries(overrides[tool] || {})) {
-      if (p === null) delete out[tool][m];
-      else out[tool][m] = { ...p, source: 'custom' };
+    for (const [m, p] of Object.entries(base.models[tool] || {})) out[tool][m] = { ...p };
+    for (const [m, p] of Object.entries((overrides && overrides[tool]) || {})) {
+      if (p === null) { delete out[tool][m]; continue; }
+      if (p.source === 'ai' && out[tool][m] && (p.updatedAt || '') < base.updated) continue; // 基準價格表已經更新
+      out[tool][m] = { ...p, source: p.source === 'ai' ? 'ai' : 'custom' };
     }
   }
   return out;
@@ -74,11 +73,11 @@ function effectivePrices(overrides = {}) {
 
 function matchModel(table, model) {
   if (table[model]) return model;
-  const undated = model.replace(/-\d{8}$/, '').replace(/@.*$/, '');
+  const undated = model.replace(/-\d{8}$/, '').replace(/-\d{4}-\d{2}-\d{2}$/, '').replace(/@.*$/, '');
   if (table[undated]) return undated;
   let best = null;
   for (const k of Object.keys(table)) if (undated.startsWith(k) && (!best || k.length > best.length)) best = k;
   return best;
 }
 
-module.exports = { PRICES_UPDATED, SOURCES, DEFAULT_PRICES, effectivePrices, matchModel };
+module.exports = { BUNDLED_PATH, REMOTE_URL, TOOLS, PRICE_FIELDS, validatePriceFile, validatePrice, loadBundled, effectivePrices, matchModel };

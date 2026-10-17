@@ -84,6 +84,7 @@ select, input[type=search], input[type=number], textarea {
 .src { font-size: 11px; border-radius: 6px; padding: 0 6px; border: 1px solid var(--border); color: var(--text-2); }
 .src.custom { border-color: var(--accent); color: var(--accent); }
 .src.estimate { border-style: dashed; }
+.src.ai { border-color: var(--s7); color: var(--s7); }
 .link-btn { background: none !important; border: 0 !important; color: var(--accent) !important; padding: 0 !important; cursor: pointer; }
 .banner {
   margin: 0 24px 12px; padding: 10px 14px; border-radius: 10px; border: 1px solid var(--critical);

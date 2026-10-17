@@ -449,10 +449,15 @@ function fillModelSelect() {
 function unpricedModels() {
   return (S.data.models_seen || []).filter(m => !m.priceKey && viewApps().includes(APP_KEYS.indexOf(m.app)));
 }
+// 有未定價模型、或價格表超過 30 天沒更新時提醒；兩種情況都可以請使用者的 AI「更新模型價格」
 function renderPriceNotice() {
   const u = unpricedModels();
-  $('#priceNotice').hidden = !u.length;
-  if (u.length) $('#priceNotice').innerHTML = `⚠ 有 ${u.length} 個模型沒有價格，花費未計入：${u.map(m => esc(m.model)).join('、')}。<a>前往設定價格</a>`;
+  const stale = PRICES && PRICES.staleDays > 30 ? PRICES.staleDays : 0;
+  const msgs = [];
+  if (u.length) msgs.push(`⚠ 有 ${u.length} 個模型沒有價格，花費未計入：${u.map(m => esc(m.model)).join('、')}。`);
+  if (stale) msgs.push(`價格表已經 ${stale} 天沒有更新。`);
+  $('#priceNotice').hidden = !msgs.length;
+  if (msgs.length) $('#priceNotice').innerHTML = `${msgs.join(' ')}可以對 Claude Code 或 Codex 說「更新模型價格」，或 <a>手動設定價格</a>。`;
 }
 
 // ---------- 價格表 ----------
@@ -460,11 +465,26 @@ let PRICES = null;
 async function loadPrices() {
   PRICES = await (await fetch('/api/prices')).json();
   renderPrices();
+  if (S.data) renderPriceNotice();
 }
+$('#remotePrices').addEventListener('change', e => {
+  saveConfig({ remotePrices: e.target.checked }, '#remoteMsg').then(loadPrices);
+});
+$('#checkPrices').addEventListener('click', async () => {
+  $('#remoteMsg').textContent = '檢查中…';
+  PRICES = await (await fetch('/api/prices/check', { method: 'POST' })).json();
+  S.etag = null; await load();
+  renderPrices();
+});
 const num = v => (v == null || v === '' ? '' : v);
 function renderPrices() {
   if (!PRICES || !S.data) return;
-  $('#priceMeta').innerHTML = `預設價格更新於 ${PRICES.updated}・<a href="${PRICES.sources.claude}" target="_blank" rel="noopener">Claude 價目</a>・<a href="${PRICES.sources.codex}" target="_blank" rel="noopener">OpenAI 價目</a>`;
+  $('#priceMeta').innerHTML = `官方價格表 ${PRICES.updated}（${PRICES.baseSource === 'remote' ? 'GitHub 最新版' : 'plugin 內建'}）・<a href="${PRICES.sources.claude}" target="_blank" rel="noopener">Claude 價目</a>・<a href="${PRICES.sources.codex}" target="_blank" rel="noopener">OpenAI 價目</a>`;
+  $('#remotePrices').checked = PRICES.remote.enabled;
+  $('#checkPrices').disabled = !PRICES.remote.enabled;
+  $('#remoteMsg').textContent = !PRICES.remote.enabled ? '已關閉，只使用 plugin 內建的價格表'
+    : PRICES.remote.error ? `上次下載失敗：${PRICES.remote.error}`
+    : PRICES.remote.lastCheck ? `上次檢查 ${fmtTime(PRICES.remote.lastCheck)}` : '尚未檢查';
   const seen = {};
   (S.data.models_seen || []).forEach(m => { seen[m.app + '|' + m.model] = m; });
   $('#priceTables').innerHTML = viewApps().map(ai => {
@@ -481,8 +501,10 @@ function renderPrices() {
       const calls = usedCount(tool, name);
       const inp = (f, v, ph = '') => `<input type="number" step="any" min="0" data-tool="${tool}" data-model="${esc(name)}" data-f="${f}" value="${num(v)}" placeholder="${ph}">`;
       const longTxt = p && p.long ? `＞${fmtTok(p.long.threshold)}：${p.long.input} / ${p.long.output}` : '';
-      const src = p ? `<span class="src ${p.source}">${{ official: '官方', estimate: '估計', custom: '自訂' }[p.source] || ''}</span>` : '<span class="src">未定價</span>';
-      const reset = p && p.source === 'custom' && PRICES.defaults[tool][name] ? ` <button class="link-btn" data-reset="${tool}|${esc(name)}">還原</button>` : '';
+      const srcTip = p && p.source === 'ai' ? ` title="${esc(`${p.updatedAt || ''} ${p.sourceUrl || ''}`.trim())}"` : '';
+      const src = p ? `<span class="src ${p.source}"${srcTip}>${{ official: '官方', estimate: '估計', ai: 'AI 更新', custom: '自訂' }[p.source] || ''}</span>` : '<span class="src">未定價</span>';
+      const isOverride = p && (p.source === 'custom' || p.source === 'ai');
+      const reset = isOverride ? ` <button class="link-btn" data-reset="${tool}|${esc(name)}">${PRICES.defaults[tool][name] ? '還原' : '刪除'}</button>` : '';
       return `<tr class="${p ? '' : 'unpriced'}"><td>${esc(name)}${users.length ? `<div class="muted small">也套用於 ${users.map(esc).join('、')}</div>` : ''}</td>
         <td class="num">${calls ? calls.toLocaleString() : ''}</td>
         <td>${inp('input', p && p.input)}</td><td>${inp('cacheRead', p && p.cacheRead)}</td>
@@ -522,8 +544,11 @@ function collectPriceOverrides() {
       if (v.input == null || v.output == null) { if (!def) delete out[tool][m]; continue; }
       const base = PRICES.effective[tool][m] || {};
       const merged = { ...base, ...v };
-      delete merged.source;
-      const same = def && ['input', 'output', 'cacheRead', 'cacheWrite5m'].every(f => (def[f] ?? null) === (merged[f] ?? null));
+      const FIELDS = ['input', 'output', 'cacheRead', 'cacheWrite5m'];
+      // 這一列沒有被改動：維持原狀（AI 更新仍是 AI 更新）
+      if (PRICES.effective[tool][m] && FIELDS.every(f => (base[f] ?? null) === (merged[f] ?? null))) continue;
+      delete merged.source; delete merged.updatedAt; delete merged.sourceUrl;
+      const same = def && FIELDS.every(f => (def[f] ?? null) === (merged[f] ?? null));
       if (same) delete out[tool][m]; else out[tool][m] = merged;
     }
     const nameEl = document.querySelector(`#priceTables input[data-tool="${tool}"][data-new]`);
