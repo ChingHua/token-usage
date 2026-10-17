@@ -1,5 +1,5 @@
 ---
-description: 開啟 Claude Token 用量儀表板（加上 stop 停止、status 查看狀態）
+description: 開啟 AI Token 用量儀表板（Claude Code 與 Codex；加上 stop 停止、status 查看狀態）
 argument-hint: "[stop|status]"
 allowed-tools: Bash(node:*)
 ---

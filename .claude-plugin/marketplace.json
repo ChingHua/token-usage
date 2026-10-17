@@ -1,13 +1,16 @@
 {
-  "name": "cmuh-claude-tools",
-  "owner": { "name": "CMUH ITAI" },
-  "metadata": { "description": "CMUH 內部 Claude Code 工具" },
+  "name": "ai-usage-tools",
+  "owner": {
+    "name": "ChingHua"
+  },
+  "metadata": {
+    "description": "Claude Code plugins for tracking AI token usage"
+  },
   "plugins": [
     {
       "name": "token-usage",
       "source": "./plugins/token-usage",
-      "description": "Claude Code 與 Codex 的 token 用量儀表板：用量細項、session 用量、各情境消耗、多種圖表與用量門檻通知",
-      "version": "0.4.0"
+      "description": "Claude Code 與 Codex 的 token 用量儀表板：用量細項、session 用量、各情境消耗、多種圖表與用量門檻通知"
     }
   ]
 }

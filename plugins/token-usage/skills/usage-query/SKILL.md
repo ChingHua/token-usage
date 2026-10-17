@@ -1,6 +1,6 @@
 ---
 name: usage-query
-description: 查看本機 Claude Code 的 token 用量、花費、session 用量、各情境消耗，或設定用量通知門檻。當使用者問「我用了多少 token」「今天花多少錢」「哪個 session 最耗 token」「打開用量儀表板」「設定用量通知」時使用。
+description: 查看本機 Claude Code 與 OpenAI Codex 的 token 用量、花費、session 用量、各情境消耗，或設定用量通知門檻。當使用者問「我用了多少 token」「今天花多少錢」「哪個 session 最耗 token」「打開用量儀表板」「設定用量通知」時使用。
 ---
 
 # Claude Token 用量儀表板

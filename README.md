@@ -1,8 +1,10 @@
-# Claude Token 用量儀表板（Claude Code plugin）
+# AI Token 用量儀表板（Claude Code plugin）
+
+> **English summary** — A Claude Code plugin that reads your local Claude Code and OpenAI Codex session logs and shows a local web dashboard of token usage: per-call breakdown, per-session and per-scenario consumption, per-model cost estimates, multi-device totals via a synced folder, and threshold notifications. Everything runs on your machine; no data is sent anywhere. Install with `/plugin marketplace add ChingHua/token-usage` then `/plugin install token-usage@ai-usage-tools`. The UI is in Traditional Chinese.
 
 讀取本機 Claude Code 對話紀錄（`~/.claude/projects/**/*.jsonl`）與 OpenAI Codex 對話紀錄（`~/.codex/sessions`），統計每次 API 呼叫的 token 用量，用網頁儀表板呈現，並在超過門檻時通知。
 
-預設只統計**這台電腦**的 Claude Code 用量；啟用「多裝置同步」後可以合計自己多台電腦的用量。claude.ai 網頁版與手機 App 的用量不在內。
+預設只統計**這台電腦**的用量；啟用「多裝置同步」後可以合計自己多台電腦的用量。claude.ai 網頁版與手機 App 的用量不在內。
 
 ## 需求
 
@@ -14,11 +16,27 @@
 這個倉庫本身就是一個 plugin marketplace。在 Claude Code 裡執行：
 
 ```
-/plugin marketplace add <這個倉庫的路徑或 Git 網址>
-/plugin install token-usage@cmuh-claude-tools
+/plugin marketplace add ChingHua/token-usage
+/plugin install token-usage@ai-usage-tools
 ```
 
-安裝後重新啟動 Claude Code。
+安裝後重新啟動 Claude Code，再輸入 `/token-usage` 開啟儀表板。
+
+**建議開啟自動更新**（第三方市集預設是關閉的）：輸入 `/plugin` → 「Marketplaces」分頁 → 選 `ai-usage-tools` → 「Enable auto-update」。開啟後 Claude Code 會在背景檢查新版，更新後輸入 `/reload-plugins` 或重新啟動即可套用。
+
+手動更新到新版：
+
+```
+/plugin marketplace update ai-usage-tools
+/plugin update token-usage@ai-usage-tools
+```
+
+## 隱私
+
+- 所有資料都在你的電腦上處理。儀表板伺服器只監聽 `127.0.0.1`，不會連到任何外部服務（只有網頁會從 cdnjs 載入圖表函式庫 Chart.js）。
+- 會讀取 `~/.claude/projects` 與 `~/.codex/sessions` 裡的對話紀錄，只取用 token 數、模型、時間、工具名稱、專案資料夾名稱、session 標題與每次提問的前 160 字。
+- 用量歷史存在 `~/.claude-token-usage/`；啟用多裝置同步時，會寫到你指定的資料夾（例如自己的 OneDrive）。這些檔案含有提問片段，不要分享給別人。
+- 安裝後，每次啟動 Claude Code 會在背景啟動伺服器（SessionStart hook），讓門檻通知持續運作。不需要的話可以用 `/plugin disable token-usage@ai-usage-tools` 停用。
 
 ## 使用
 
@@ -78,6 +96,10 @@
 
 花費依「模型價格」估算，**不是官方帳單**。
 
+## 授權
+
+[MIT](LICENSE)
+
 ## 開發
 
 ```
@@ -85,4 +107,4 @@ node plugins/token-usage/server.js          # 前景執行伺服器
 claude plugin validate .                    # 驗證 marketplace 與 plugin
 ```
 
-發佈新版時，同步更新 `plugins/token-usage/.claude-plugin/plugin.json` 和 `.claude-plugin/marketplace.json` 的 `version`。
+發佈新版時，一定要升 `plugins/token-usage/.claude-plugin/plugin.json` 的 `version`（版本號只寫在這裡）。版本號沒變的話，使用者會繼續用快取裡的舊版。
