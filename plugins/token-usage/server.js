@@ -6,6 +6,7 @@ const path = require('path');
 const http = require('http');
 const os = require('os');
 const { execFile } = require('child_process');
+const { PRICES_UPDATED, SOURCES, DEFAULT_PRICES, effectivePrices, matchModel } = require('./pricing');
 
 const PUBLIC = path.join(__dirname, 'public');
 // 設定與通知狀態放在使用者目錄，plugin 更新時不會被覆蓋
@@ -22,16 +23,9 @@ const DEFAULT_CONFIG = {
   windowsToast: true,
   syncDir: '',            // 多裝置同步資料夾（例如 OneDrive 內的資料夾），空白代表不同步
   deviceName: '',         // 顯示用的裝置名稱，空白時用電腦名稱
-  // 美元 / 百萬 token（估算值，可自行修改）。key 為模型名稱中包含的字串，依序比對。
-  pricing: {
-    opus: { input: 5, output: 25 },
-    fable: { input: 5, output: 25 },
-    sonnet: { input: 3, output: 15 },
-    haiku: { input: 1, output: 5 },
-    gpt: { input: 1.25, output: 10 }, // Codex（OpenAI）模型，請依實際價格調整
-    default: { input: 3, output: 15 },
-  },
-  cacheMultipliers: { write5m: 1.25, write1h: 2, read: 0.1 },
+  // 各模型價格的預設值在 pricing.js；這裡只存使用者自訂的價格：{ claude: { 模型: {...} }, codex: {...} }
+  priceOverrides: {},
+  cacheMultipliers: { write5m: 1.25, write1h: 2 }, // 模型沒有指定快取寫入價格時，以輸入價格乘上這個倍率
   thresholds: {
     dailyCost: 50,          // 今日估算花費（USD）
     dailyTokens: 50000000,  // 今日總 token（含快取讀取）
@@ -46,7 +40,8 @@ function loadConfig() {
   try { user = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8')); } catch { /* 首次執行 */ }
   const cfg = {
     ...DEFAULT_CONFIG, ...user,
-    pricing: { ...DEFAULT_CONFIG.pricing, ...(user.pricing || {}) },
+    priceOverrides: user.priceOverrides || {},
+    pricing: undefined, // 舊版的關鍵字價格設定，已改用 pricing.js
     cacheMultipliers: { ...DEFAULT_CONFIG.cacheMultipliers, ...(user.cacheMultipliers || {}) },
     thresholds: { ...DEFAULT_CONFIG.thresholds, ...(user.thresholds || {}) },
   };
@@ -140,6 +135,7 @@ function parseFile(file) {
           cacheWrite1h: cw1h,
           cacheRead: u.cache_read_input_tokens || 0,
           thinking: (u.output_tokens_details && u.output_tokens_details.thinking_tokens) || 0,
+          fast: u.speed === 'fast',
           tools: [],
           sub: isSub || !!o.isSidechain,
           prompt: lastPrompt,
@@ -205,15 +201,31 @@ function parseCodexFile(file) {
   return { calls, titles: {}, limits };
 }
 
-function priceFor(model) {
-  for (const [k, v] of Object.entries(config.pricing)) if (k !== 'default' && model.includes(k)) return v;
-  return config.pricing.default;
+// ---------- 價格 ----------
+// 每個工具有自己的價格表，模型只在所屬工具的表裡比對。
+let prices = effectivePrices(config.priceOverrides);
+const priceMatchCache = new Map(); // `${app}|${model}` -> 價格表 key 或 null
+function priceKeyFor(app, model) {
+  const k = `${app}|${model}`;
+  if (!priceMatchCache.has(k)) priceMatchCache.set(k, matchModel(prices[app] || {}, model));
+  return priceMatchCache.get(k);
 }
+// 回傳 null 代表這個模型沒有價格（不計入花費，在「價格設定」提示）
 function costOf(c) {
-  const p = priceFor(c.model), m = config.cacheMultipliers;
+  const app = c.app || 'claude';
+  const key = priceKeyFor(app, c.model);
+  if (!key) return null;
+  let p = prices[app][key];
+  const m = config.cacheMultipliers;
+  const promptTokens = c.input + c.cacheWrite + c.cacheRead;
+  const base = p;
+  if (p.long && promptTokens > p.long.threshold) p = { ...p, ...p.long };
+  const cw5Price = p.cacheWrite5m != null && p === base ? p.cacheWrite5m : p.input * m.write5m;
+  const cw1hPrice = p.cacheWrite1h != null && p === base ? p.cacheWrite1h : p.input * m.write1h;
   const cw5 = c.cacheWrite - c.cacheWrite1h;
-  return (c.input * p.input + c.output * p.output + cw5 * p.input * m.write5m +
-    c.cacheWrite1h * p.input * m.write1h + c.cacheRead * p.input * m.read) / 1e6;
+  const cost = (c.input * p.input + c.output * p.output + c.cacheRead * (p.cacheRead ?? p.input) +
+    cw5 * cw5Price + c.cacheWrite1h * cw1hPrice) / 1e6;
+  return c.fast && p.fast ? cost * p.fast : cost;
 }
 
 // ---------- 裝置與同步 ----------
@@ -245,7 +257,7 @@ const indexer = () => { const m = new Map(), arr = []; return { arr, get(k) { if
 function encodeDevice(calls, titles) {
   const sessions = indexer(), cwds = indexer(), models = indexer(), prompts = indexer();
   const rows = calls.map(c => [c.key, c.ts, sessions.get(c.session), cwds.get(c.cwd), models.get(c.model),
-    c.input, c.output, c.cacheWrite, c.cacheWrite1h, c.cacheRead, c.thinking, c.tools.join(','), c.sub ? 1 : 0, prompts.get(c.prompt || ''), APPS.indexOf(c.app || 'claude')]);
+    c.input, c.output, c.cacheWrite, c.cacheWrite1h, c.cacheRead, c.thinking, c.tools.join(','), c.sub ? 1 : 0, prompts.get(c.prompt || ''), APPS.indexOf(c.app || 'claude'), c.fast ? 1 : 0]);
   const t = {};
   for (const s of sessions.arr) if (titles[s]) t[s] = titles[s];
   return { version: FILE_VERSION, device: { id: deviceId, name: deviceName() }, updatedAt: Date.now(),
@@ -255,7 +267,7 @@ function decodeDevice(d) {
   const calls = d.rows.map(r => ({
     key: r[0], ts: r[1], session: d.sessions[r[2]], cwd: d.cwds[r[3]], model: d.models[r[4]],
     input: r[5], output: r[6], cacheWrite: r[7], cacheWrite1h: r[8], cacheRead: r[9], thinking: r[10],
-    tools: r[11] ? r[11].split(',') : [], sub: !!r[12], prompt: d.prompts[r[13]], app: APPS[r[14] || 0],
+    tools: r[11] ? r[11].split(',') : [], sub: !!r[12], prompt: d.prompts[r[13]], app: APPS[r[14] || 0], fast: !!r[15],
   }));
   return { device: d.device, updatedAt: d.updatedAt, calls, titles: d.titles || {} };
 }
@@ -360,14 +372,20 @@ function buildDataset() {
   const sessionInfo = {};
   const firstCwd = {};
   for (const [c] of all) if (c.cwd && !firstCwd[c.session]) firstCwd[c.session] = c.cwd;
+  const modelInfo = {}; // `${app}|${model}` -> { app, model, calls, priceKey, exact }
   const rows = all.map(([c, di]) => {
     const si = sessions.get(c.session);
     const cwd0 = firstCwd[c.session] || '';
     const pi = projects.get(cwd0 ? path.basename(cwd0) || cwd0 : '(未知)');
     if (!sessionInfo[si]) sessionInfo[si] = { id: c.session, title: titles[c.session] || '', project: pi, cwd: cwd0, device: di };
     const scen = c.tools.length ? classifyTool(c.tools[0]) : 7;
+    const app = c.app || 'claude';
+    const mk = `${app}|${c.model}`;
+    const mi = modelInfo[mk] || (modelInfo[mk] = { app, model: c.model, calls: 0, priceKey: priceKeyFor(app, c.model) });
+    mi.calls++;
+    const cost = costOf(c);
     return [c.ts, si, pi, models.get(c.model), c.input, c.output, c.cacheWrite, c.cacheRead,
-      +costOf(c).toFixed(6), scen, c.sub ? 1 : 0, prompts.get(c.prompt || ''), c.thinking, c.tools.join(','), di, Math.max(0, APPS.indexOf(c.app || 'claude'))];
+      cost == null ? 0 : +cost.toFixed(6), scen, c.sub ? 1 : 0, prompts.get(c.prompt || ''), c.thinking, c.tools.join(','), di, Math.max(0, APPS.indexOf(c.app || 'claude'))];
   });
   dataset = {
     generatedAt: Date.now(),
@@ -378,6 +396,7 @@ function buildDataset() {
     fields: ['ts', 'session', 'project', 'model', 'input', 'output', 'cacheWrite', 'cacheRead', 'cost', 'scenario', 'sub', 'prompt', 'thinking', 'tools', 'device', 'app'],
     apps: APP_LABELS,
     limits: { codex: codexLimits },
+    models_seen: Object.values(modelInfo),
     rows,
   };
   datasetStamp = String(dataset.generatedAt);
@@ -464,6 +483,7 @@ const server = http.createServer((req, res) => {
     return send(res, 200, dataset);
   }
   if (url.pathname === '/api/ping') return send(res, 200, { app: 'claude-token-usage', pid: process.pid });
+  if (url.pathname === '/api/prices') return send(res, 200, { updated: PRICES_UPDATED, sources: SOURCES, defaults: DEFAULT_PRICES, overrides: config.priceOverrides, effective: prices });
   if (url.pathname === '/api/alerts') return send(res, 200, { alerts: alertLog });
   if (url.pathname === '/api/config' && req.method === 'GET') return send(res, 200, configView());
   if (url.pathname === '/api/config' && req.method === 'POST') {
@@ -474,7 +494,7 @@ const server = http.createServer((req, res) => {
         const patch = JSON.parse(body);
         const next = { ...config };
         if (patch.thresholds) next.thresholds = { ...config.thresholds, ...patch.thresholds };
-        if (patch.pricing) next.pricing = patch.pricing;
+        if (patch.priceOverrides && typeof patch.priceOverrides === 'object') next.priceOverrides = patch.priceOverrides;
         if (typeof patch.windowsToast === 'boolean') next.windowsToast = patch.windowsToast;
         if (typeof patch.deviceName === 'string') next.deviceName = patch.deviceName.trim().slice(0, 60);
         if (typeof patch.syncDir === 'string') {
@@ -485,6 +505,7 @@ const server = http.createServer((req, res) => {
         }
         fs.writeFileSync(CONFIG_PATH, JSON.stringify(next, null, 2));
         config = next;
+        prices = effectivePrices(config.priceOverrides); priceMatchCache.clear();
         dataset = null; fileCache.clear(); // 價格可能變了，重新計算
         refresh();
         send(res, 200, configView());

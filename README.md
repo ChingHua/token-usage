@@ -46,9 +46,16 @@
 | Claude Code | `~/.claude/projects`（或 `CLAUDE_CONFIG_DIR`） | 含桌面 App 的 Code 分頁與子代理 |
 | OpenAI Codex | `~/.codex/sessions`、`archived_sessions`（或 `CODEX_HOME`） | 另外顯示 Codex 方案的 5 小時 / 每週額度使用率 |
 
-上方「工具」篩選可以只看其中一種。Codex 的 `input_tokens` 已包含快取 token，這裡會拆開成「輸入」與「快取讀取」，和 Claude 的欄位一致。Codex 在 Windows 上多數動作都透過 `shell_command`，「情境分析」會依指令內容（例如 `rg`、`Get-Content`）歸到讀取/搜尋或編輯檔案。
+右上角可以切換「Claude Code」「Codex」「全部比較」：前兩者各自只看自己的資料與模型（模型篩選、價格、圖表都分開），「全部比較」把兩個工具放在一起比。Codex 的 `input_tokens` 已包含快取 token，這裡會拆開成「輸入」與「快取讀取」，和 Claude 的欄位一致。Codex 在 Windows 上多數動作都透過 `shell_command`，「情境分析」會依指令內容（例如 `rg`、`Get-Content`）歸到讀取/搜尋或編輯檔案。
 
-Codex 模型預設用 `pricing.gpt` 的單價估算，請依實際價格調整。
+## 模型價格
+
+每個工具有自己的價格表（[pricing.js](plugins/token-usage/pricing.js)），每個模型分別設定輸入、輸出、快取讀取、快取寫入（Claude）、長上下文價格；Claude Opus 的快速模式會套用 2 倍價格。
+
+- 預設價格取自官方價目表（更新日期寫在 `PRICES_UPDATED`）。官方已不列出的舊 Codex 模型標為「估計」，沿用同代模型的價格。
+- 比對順序：模型名稱完全相同 → 去掉日期後綴 → 同系列最長前綴。都找不到的模型標為「未定價」，花費不計入，畫面上方會提示。
+- 在「通知與設定」→「模型價格」可以直接修改或新增模型，改過的標為「自訂」，可以按「還原」回到官方價格。自訂價格存在 `config.json` 的 `priceOverrides`，plugin 更新時不會被覆蓋。
+- 花費一律依 API 價格換算；如果使用的是訂閱方案（Claude Max、ChatGPT Plus/Pro 等），這是「等值 API 費用」，不是實際帳單。
 
 ## 多裝置同步（OneDrive）
 
@@ -69,7 +76,7 @@ Codex 模型預設用 `pricing.gpt` 的單價估算，請依實際價格調整�
 
 `~/.claude-token-usage/config.json`（第一次啟動時建立）：連接埠、門檻、價格。記錄檔在同一個資料夾的 `server.log`。
 
-花費依 `pricing` 的單價估算（美元 / 百萬 token；快取寫入 5 分鐘 ×1.25、1 小時 ×2、快取讀取 ×0.1），**不是官方帳單**。
+花費依「模型價格」估算，**不是官方帳單**。
 
 ## 開發
 

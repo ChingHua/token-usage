@@ -13,6 +13,11 @@
     <h1>AI Token 用量</h1>
     <span class="muted" id="status">載入中…</span>
   </div>
+  <div class="seg app-seg" id="appSeg" role="tablist" aria-label="AI 工具">
+    <button data-v="0">Claude Code</button>
+    <button data-v="1">Codex</button>
+    <button data-v="">全部比較</button>
+  </div>
   <nav class="tabs" role="tablist">
     <button class="tab active" data-tab="overview">總覽</button>
     <button class="tab" data-tab="scenario">情境分析</button>
@@ -29,7 +34,6 @@
     <button data-v="30d">30 天</button>
     <button data-v="all">全部</button>
   </div>
-  <label>工具 <select id="fApp"><option value="">全部</option></select></label>
   <label>專案 <select id="fProject"><option value="">全部</option></select></label>
   <label>模型 <select id="fModel"><option value="">全部</option></select></label>
   <label>裝置 <select id="fDevice"><option value="">全部</option></select></label>
@@ -41,6 +45,7 @@
 </section>
 
 <div id="banner" class="banner" hidden></div>
+<div id="priceNotice" class="notice" hidden></div>
 
 <main>
   <!-- 總覽 -->
@@ -58,7 +63,7 @@
         <div class="chart"><canvas id="cTypes"></canvas></div>
       </div>
       <div class="card">
-        <div class="card-h"><h2>模型分佈</h2></div>
+        <div class="card-h"><h2 id="modelTitle">模型分佈</h2></div>
         <div class="legend" id="modelLegend"></div>
         <div class="chart"><canvas id="cModels"></canvas></div>
       </div>
@@ -185,8 +190,9 @@
         <ul id="alertList" class="alert-list"></ul>
       </div>
       <div class="card span2">
-        <div class="card-h"><h2>價格設定（估算用）</h2><span class="muted">美元 / 百萬 token；模型名稱包含 key 即套用</span></div>
-        <textarea id="pricing" rows="9" spellcheck="false"></textarea>
+        <div class="card-h"><h2>模型價格</h2><span class="muted" id="priceMeta"></span></div>
+        <p class="muted small">美元 / 百萬 token。每個工具只用自己的價格表；模型名稱完全相同優先，其次是同系列前綴。「官方」來自官方價目表，「估計」是官方已不列出、沿用同代模型的價格，「自訂」是你改過的值。花費都是依 API 價格換算的估計，不是訂閱方案的實際帳單。</p>
+        <div id="priceTables"></div>
         <div class="row"><button id="savePricing">儲存價格</button><span id="prMsg" class="muted small"></span></div>
       </div>
     </div>

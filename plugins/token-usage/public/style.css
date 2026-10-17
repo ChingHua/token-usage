@@ -71,6 +71,20 @@ select, input[type=search], input[type=number], textarea {
 .seg button { border: 0; background: none; padding: 4px 10px; border-radius: 6px; cursor: pointer; color: var(--text-2); }
 .seg button.on { background: var(--grid); color: var(--text); font-weight: 600; }
 
+.app-seg button { padding: 5px 14px; }
+.notice {
+  margin: 0 24px 12px; padding: 8px 14px; border-radius: 10px; border: 1px solid var(--border);
+  background: var(--surface); color: var(--text-2); font-size: 13px;
+}
+.notice a { color: var(--accent); cursor: pointer; }
+.price-table input[type=number] { width: 84px; padding: 3px 6px; }
+.price-table input[type=text] { width: 180px; padding: 3px 6px; }
+.price-table tr.unpriced td { background: color-mix(in srgb, var(--warning) 14%, transparent); }
+.price-table h3 { font-size: 13px; margin: 14px 0 6px; }
+.src { font-size: 11px; border-radius: 6px; padding: 0 6px; border: 1px solid var(--border); color: var(--text-2); }
+.src.custom { border-color: var(--accent); color: var(--accent); }
+.src.estimate { border-style: dashed; }
+.link-btn { background: none !important; border: 0 !important; color: var(--accent) !important; padding: 0 !important; cursor: pointer; }
 .banner {
   margin: 0 24px 12px; padding: 10px 14px; border-radius: 10px; border: 1px solid var(--critical);
   background: color-mix(in srgb, var(--critical) 10%, var(--surface)); display: flex; gap: 10px; align-items: start;
@@ -147,7 +161,7 @@ textarea { width: 100%; font-family: ui-monospace, Consolas, monospace; font-siz
 @media (max-width: 860px) {
   .top, .filters { padding-left: 16px; padding-right: 16px; }
   main { padding: 0 16px 32px; }
-  .banner { margin: 0 16px 12px; }
+  .banner, .notice { margin: 0 16px 12px; }
   .grid { grid-template-columns: 1fr; }
   .span2 { grid-column: auto; }
 }

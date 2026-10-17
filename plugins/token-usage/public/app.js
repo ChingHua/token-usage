@@ -2,7 +2,7 @@
 // ---------- 狀態 ----------
 const S = {
   data: null, etag: null, config: null,
-  range: '7d', metric: 'tokens', project: '', model: '', source: '', device: '', app: '',
+  range: '7d', metric: 'tokens', project: '', model: '', source: '', device: '', app: (() => { try { const v = localStorage.getItem('app'); return v == null ? '0' : v; } catch { return '0'; } })(),
   tab: 'overview', session: null, sessSort: { key: 'last', dir: -1 },
 };
 const R = { ts: 0, session: 1, project: 2, model: 3, input: 4, output: 5, cw: 6, cr: 7, cost: 8, scen: 9, sub: 10, prompt: 11, thinking: 12, tools: 13, device: 14, app: 15 };
@@ -143,7 +143,12 @@ function renderOverview(rows) {
   const b = buckets(rows);
   $('#tlNote').textContent = b.hourly ? '每小時' : '每日';
   let sets;
-  if (S.metric === 'cost') {
+  if (S.app === '') {
+    const byApp = S.data.apps.map(() => b.keys.map(() => 0));
+    rows.forEach(r => { const i = b.index(r[R.ts]); if (i != null) byApp[r[R.app]][i] += val(r); });
+    sets = S.data.apps.map((a, k) => barDs(a, byApp[k], slot(k + 1), k === S.data.apps.length - 1));
+    legend('#tlLegend', S.data.apps.map((a, k) => [a, slot(k + 1)]));
+  } else if (S.metric === 'cost') {
     const byModel = S.data.models.map(() => b.keys.map(() => 0));
     rows.forEach(r => { const i = b.index(r[R.ts]); if (i != null) byModel[r[R.model]][i] += r[R.cost]; });
     const used = S.data.models.map((m, i) => i).filter(i => byModel[i].some(v => v));
@@ -152,22 +157,32 @@ function renderOverview(rows) {
   } else {
     const arr = TYPES.map(() => b.keys.map(() => 0));
     rows.forEach(r => { const i = b.index(r[R.ts]); if (i != null) TYPES.forEach((t, k) => { arr[k][i] += r[t.idx]; }); });
-    sets = TYPES.map((t, k) => barDs(t.label, arr[k], slot(t.slot), k === TYPES.length - 1));
-    legend('#tlLegend', TYPES.map(t => [t.label, slot(t.slot)]));
+    const used = TYPES.map((t, k) => k).filter(k => arr[k].some(v => v));
+    sets = used.map((k, j) => barDs(TYPES[k].label, arr[k], slot(TYPES[k].slot), j === used.length - 1));
+    legend('#tlLegend', used.map(k => [TYPES[k].label, slot(TYPES[k].slot)]));
   }
   draw('cTimeline', { type: 'bar', data: { labels: b.labels, datasets: sets }, options: baseOpts({ stacked: true }) });
 
   // Token 類型組成（token 數；花費模式下顯示各類型的花費比重）
   const typeVals = TYPES.map(t => sum(rows, r => r[t.idx]));
-  legend('#typeLegend', TYPES.map((t, k) => [`${t.label} ${fmtTok(typeVals[k])}`, slot(t.slot)]));
-  doughnut('cTypes', TYPES.map(t => t.label), typeVals, TYPES.map(t => slot(t.slot)), fmtTok);
+  const usedTypes = TYPES.filter((t, k) => typeVals[k] > 0);
+  legend('#typeLegend', usedTypes.map(t => [`${t.label} ${fmtTok(typeVals[TYPES.indexOf(t)])}`, slot(t.slot)]));
+  doughnut('cTypes', usedTypes.map(t => t.label), usedTypes.map(t => typeVals[TYPES.indexOf(t)]), usedTypes.map(t => slot(t.slot)), fmtTok);
 
   // 模型
+  if (S.app === '') {
+    const av = S.data.apps.map((a, k) => sum(rows.filter(r => r[R.app] === k), val));
+    $('#modelTitle').textContent = '工具分佈';
+    legend('#modelLegend', S.data.apps.map((a, k) => [`${a} ${fmtVal(av[k])}`, slot(k + 1)]));
+    doughnut('cModels', S.data.apps, av, S.data.apps.map((a, k) => slot(k + 1)));
+  } else {
+  $('#modelTitle').textContent = '模型分佈';
   const mVals = S.data.models.map((m, i) => sum(rows.filter(r => r[R.model] === i), val));
   const mIdx = mVals.map((v, i) => i).filter(i => mVals[i] > 0).sort((a, b) => mVals[b] - mVals[a]);
   const mColor = i => slot((S.data.models.indexOf(S.data.models[i]) % 8) + 1);
   legend('#modelLegend', mIdx.map(i => [`${S.data.models[i]} ${fmtVal(mVals[i])}`, mColor(i)]));
   doughnut('cModels', mIdx.map(i => S.data.models[i]), mIdx.map(i => mVals[i]), mIdx.map(mColor));
+  }
 
   // 5 小時滾動視窗
   const step = 30 * 6e4, from = now - 48 * 36e5;
@@ -414,6 +429,112 @@ function dismissAlerts() {
 }
 
 // ---------- 設定 ----------
+// ---------- 工具與模型 ----------
+const APP_KEYS = ['claude', 'codex'];
+function viewApps() { return S.app === '' ? [0, 1] : [+S.app]; }
+function fillModelSelect() {
+  const seen = (S.data.models_seen || []).filter(m => viewApps().includes(APP_KEYS.indexOf(m.app)));
+  const el = $('#fModel');
+  el.innerHTML = '<option value="">全部</option>' + seen.sort((a, b) => b.calls - a.calls)
+    .map(m => `<option value="${S.data.models.indexOf(m.model)}">${esc(m.model)}${S.app === '' ? '（' + S.data.apps[APP_KEYS.indexOf(m.app)] + '）' : ''}</option>`).join('');
+  el.value = S.model;
+  if (el.value !== S.model) S.model = '';
+}
+function unpricedModels() {
+  return (S.data.models_seen || []).filter(m => !m.priceKey && viewApps().includes(APP_KEYS.indexOf(m.app)));
+}
+function renderPriceNotice() {
+  const u = unpricedModels();
+  $('#priceNotice').hidden = !u.length;
+  if (u.length) $('#priceNotice').innerHTML = `⚠ 有 ${u.length} 個模型沒有價格，花費未計入：${u.map(m => esc(m.model)).join('、')}。<a>前往設定價格</a>`;
+}
+
+// ---------- 價格表 ----------
+let PRICES = null;
+async function loadPrices() {
+  PRICES = await (await fetch('/api/prices')).json();
+  renderPrices();
+}
+const num = v => (v == null || v === '' ? '' : v);
+function renderPrices() {
+  if (!PRICES || !S.data) return;
+  $('#priceMeta').innerHTML = `預設價格更新於 ${PRICES.updated}・<a href="${PRICES.sources.claude}" target="_blank" rel="noopener">Claude 價目</a>・<a href="${PRICES.sources.codex}" target="_blank" rel="noopener">OpenAI 價目</a>`;
+  const seen = {};
+  (S.data.models_seen || []).forEach(m => { seen[m.app + '|' + m.model] = m; });
+  $('#priceTables').innerHTML = viewApps().map(ai => {
+    const tool = APP_KEYS[ai];
+    const eff = PRICES.effective[tool] || {};
+    const isClaude = tool === 'claude';
+    // 有用到但沒有價格的模型放最上面，接著依使用次數，最後是其他模型
+    const used = Object.values(seen).filter(m => m.app === tool);
+    const names = [...new Set([...used.filter(m => !m.priceKey).map(m => m.model),
+      ...Object.keys(eff).sort((a, b) => (usedCount(tool, b) - usedCount(tool, a)) || a.localeCompare(b))])];
+    const row = name => {
+      const p = eff[name];
+      const users = used.filter(m => m.priceKey === name && m.model !== name).map(m => m.model);
+      const calls = usedCount(tool, name);
+      const inp = (f, v, ph = '') => `<input type="number" step="any" min="0" data-tool="${tool}" data-model="${esc(name)}" data-f="${f}" value="${num(v)}" placeholder="${ph}">`;
+      const longTxt = p && p.long ? `＞${fmtTok(p.long.threshold)}：${p.long.input} / ${p.long.output}` : '';
+      const src = p ? `<span class="src ${p.source}">${{ official: '官方', estimate: '估計', custom: '自訂' }[p.source] || ''}</span>` : '<span class="src">未定價</span>';
+      const reset = p && p.source === 'custom' && PRICES.defaults[tool][name] ? ` <button class="link-btn" data-reset="${tool}|${esc(name)}">還原</button>` : '';
+      return `<tr class="${p ? '' : 'unpriced'}"><td>${esc(name)}${users.length ? `<div class="muted small">也套用於 ${users.map(esc).join('、')}</div>` : ''}</td>
+        <td class="num">${calls ? calls.toLocaleString() : ''}</td>
+        <td>${inp('input', p && p.input)}</td><td>${inp('cacheRead', p && p.cacheRead)}</td>
+        ${isClaude ? `<td>${inp('cacheWrite5m', p && p.cacheWrite5m, p ? +(p.input * 1.25).toFixed(4) : '')}</td>` : ''}
+        <td>${inp('output', p && p.output)}</td><td class="muted small">${longTxt}</td><td>${src}${reset}</td></tr>`;
+    };
+    return `<div class="table-wrap price-table"><h3>${S.data.apps[ai]}</h3><table>
+      <thead><tr><th>模型</th><th class="num">呼叫數</th><th>輸入</th><th>${isClaude ? '快取讀取' : '快取輸入'}</th>${isClaude ? '<th>快取寫入（5 分）</th>' : ''}<th>輸出</th><th>長上下文</th><th>來源</th></tr></thead>
+      <tbody>${names.map(row).join('')}
+      <tr><td><input type="text" placeholder="新增模型名稱" data-tool="${tool}" data-new="1"></td><td></td>
+        <td><input type="number" step="any" min="0" data-tool="${tool}" data-new-f="input"></td><td><input type="number" step="any" min="0" data-tool="${tool}" data-new-f="cacheRead"></td>
+        ${isClaude ? '<td><input type="number" step="any" min="0" data-tool="claude" data-new-f="cacheWrite5m"></td>' : ''}
+        <td><input type="number" step="any" min="0" data-tool="${tool}" data-new-f="output"></td><td></td><td></td></tr>
+      </tbody></table></div>`;
+  }).join('');
+}
+function usedCount(tool, name) {
+  return (S.data.models_seen || []).filter(m => m.app === tool && m.priceKey === name).reduce((s, m) => s + m.calls, 0);
+}
+// 只把和預設值不同的價格存成自訂；其他工具（目前沒顯示）的自訂值保持不變
+function collectPriceOverrides() {
+  const out = JSON.parse(JSON.stringify(PRICES.overrides || {}));
+  const read = (tool, model) => {
+    const v = {};
+    document.querySelectorAll(`#priceTables input[data-tool="${tool}"][data-f]`).forEach(i => {
+      if (i.dataset.model === model && i.value !== '') v[i.dataset.f] = +i.value;
+    });
+    return v;
+  };
+  for (const ai of viewApps()) {
+    const tool = APP_KEYS[ai];
+    out[tool] = out[tool] || {};
+    const models = new Set([...document.querySelectorAll(`#priceTables input[data-tool="${tool}"][data-f]`)].map(i => i.dataset.model));
+    for (const m of models) {
+      const v = read(tool, m);
+      const def = PRICES.defaults[tool][m];
+      if (v.input == null || v.output == null) { if (!def) delete out[tool][m]; continue; }
+      const base = PRICES.effective[tool][m] || {};
+      const merged = { ...base, ...v };
+      delete merged.source;
+      const same = def && ['input', 'output', 'cacheRead', 'cacheWrite5m'].every(f => (def[f] ?? null) === (merged[f] ?? null));
+      if (same) delete out[tool][m]; else out[tool][m] = merged;
+    }
+    const nameEl = document.querySelector(`#priceTables input[data-tool="${tool}"][data-new]`);
+    const nv = {};
+    document.querySelectorAll(`#priceTables input[data-tool="${tool}"][data-new-f]`).forEach(i => { if (i.value !== '') nv[i.dataset.newF] = +i.value; });
+    if (nameEl && nameEl.value.trim() && nv.input != null && nv.output != null) out[tool][nameEl.value.trim()] = nv;
+  }
+  return out;
+}
+$('#priceTables').addEventListener('click', e => {
+  const b = e.target.closest('[data-reset]'); if (!b) return;
+  const [tool, model] = b.dataset.reset.split('|');
+  const ov = JSON.parse(JSON.stringify(PRICES.overrides || {}));
+  if (ov[tool]) delete ov[tool][model];
+  saveConfig({ priceOverrides: ov }, '#prMsg').then(loadPrices);
+});
+
 function renderDevices() {
   const now = Date.now();
   const ago = ts => { const m = Math.round((now - ts) / 6e4); return m < 1 ? '剛剛' : m < 60 ? `${m} 分鐘前` : m < 1440 ? `${Math.round(m / 60)} 小時前` : `${Math.round(m / 1440)} 天前`; };
@@ -431,7 +552,6 @@ function fillConfig() {
   const f = $('#thForm');
   for (const [k, v] of Object.entries(S.config.thresholds)) if (f.elements[k]) f.elements[k].value = v;
   f.elements.windowsToast.checked = !!S.config.windowsToast;
-  $('#pricing').value = JSON.stringify(S.config.pricing, null, 2);
 }
 async function saveConfig(patch, msgEl) {
   const res = await fetch('/api/config', { method: 'POST', body: JSON.stringify(patch) });
@@ -461,10 +581,11 @@ async function load() {
       S.etag = res.headers.get('ETag');
       S.data = await res.json();
       fillSelect('#fProject', S.data.projects, S.project);
-      fillSelect('#fModel', S.data.models, S.model);
+      fillModelSelect();
       fillSelect('#fDevice', S.data.devices.map(deviceLabel), S.device);
-      fillSelect('#fApp', S.data.apps, S.app);
       renderDevices();
+      renderPriceNotice();
+      renderPrices();
       render();
     }
     $('#status').textContent = `${S.data.rows.length.toLocaleString()} 次 API 呼叫・更新於 ${fmtTime(Date.now())}`;
@@ -482,8 +603,21 @@ function bindSeg(id, key) {
   });
 }
 bindSeg('#range', 'range');
+$('#appSeg').querySelectorAll('button').forEach(b => b.classList.toggle('on', b.dataset.v === S.app));
+$('#appSeg').addEventListener('click', e => {
+  const b = e.target.closest('button'); if (!b) return;
+  $('#appSeg').querySelectorAll('button').forEach(x => x.classList.toggle('on', x === b));
+  S.app = b.dataset.v; S.model = ''; S.session = null;
+  try { localStorage.setItem('app', S.app); } catch { /* ignore */ }
+  fillModelSelect(); renderPriceNotice(); renderPrices(); render();
+});
+$('#priceNotice').addEventListener('click', e => {
+  if (!e.target.closest('a')) return;
+  document.querySelector('[data-tab=alerts]').click();
+  $('#priceTables').scrollIntoView({ behavior: 'smooth' });
+});
 bindSeg('#metric', 'metric');
-[['#fProject', 'project'], ['#fModel', 'model'], ['#fSource', 'source'], ['#fDevice', 'device'], ['#fApp', 'app']].forEach(([id, k]) => $(id).addEventListener('change', e => { S[k] = e.target.value; render(); }));
+[['#fProject', 'project'], ['#fModel', 'model'], ['#fSource', 'source'], ['#fDevice', 'device']].forEach(([id, k]) => $(id).addEventListener('change', e => { S[k] = e.target.value; render(); }));
 document.querySelector('.tabs').addEventListener('click', e => {
   const b = e.target.closest('.tab'); if (!b) return;
   S.tab = b.dataset.tab;
@@ -513,8 +647,7 @@ $('#syncForm').addEventListener('submit', e => {
 });
 $('#useOneDrive').addEventListener('click', () => { $('#syncForm').elements.syncDir.value = S.config.detectedOneDrive; });
 $('#savePricing').addEventListener('click', () => {
-  let p; try { p = JSON.parse($('#pricing').value); } catch (e) { $('#prMsg').textContent = 'JSON 格式錯誤：' + e.message; return; }
-  saveConfig({ pricing: p }, '#prMsg');
+  saveConfig({ priceOverrides: collectPriceOverrides() }, '#prMsg').then(loadPrices);
 });
 $('#testToast').addEventListener('click', () => fetch('/api/test-toast').then(() => { $('#thMsg').textContent = '已送出測試通知（請看螢幕右下角）'; }));
 $('#enableNotif').addEventListener('click', async () => {
@@ -536,6 +669,7 @@ matchMedia('(prefers-color-scheme: dark)').addEventListener('change', render);
 (async () => {
   S.config = await (await fetch('/api/config')).json();
   fillConfig();
+  await loadPrices();
   await load();
   setInterval(load, (S.config.refreshSeconds || 30) * 1000);
 })();
