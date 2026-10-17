@@ -18,6 +18,7 @@
 - **Node.js 18 以上**（在終端機輸入 `node -v` 確認；沒有的話到 https://nodejs.org 安裝）
 - 這台電腦有用過 Claude Code 或 Codex（至少一種）
 - 瀏覽器（儀表板開在 http://localhost:8787 ）
+- Codex 會把較舊的紀錄壓縮成 `.jsonl.zst`。要統計這些紀錄，需要 **Node.js 22.15 以上**（內建 zstd 解壓），或系統裝有 `zstd` 指令（macOS：`brew install zstd`；Linux：用套件管理員安裝 `zstd`；Windows 建議直接把 Node.js 升級到 22.15 以上）。兩者都沒有時只會略過壓縮檔，其他用量照常統計；診斷會顯示有幾個壓縮檔讀不到。
 - 作業系統：Windows、macOS、Linux 都可以。系統通知：Windows 用通知中心的 Toast、macOS 用通知中心、Linux 需要有 `notify-send`；也都可以改用瀏覽器通知。
 
 ## 安裝
@@ -165,6 +166,8 @@ Claude Code 和 Codex 各有自己的價格表（[prices.json](plugins/token-usa
 | Codex plugin | 對 Codex 說「診斷用量儀表板讀不到的紀錄」 |
 | 直接執行 | `node plugins/token-usage/scripts/diagnose.js` |
 
+診斷也會列出每個資料夾裡有幾個壓縮檔（`.jsonl.zst`）；如果顯示「無法解壓」，照[需求](#需求)升級 Node.js 或安裝 `zstd` 指令，再重新啟動儀表板。
+
 如果診斷列出「儀表板目前不會讀」的資料夾，照它印出的那一行加進 `config.json` 的 `extraCodexDirs`，再重新啟動儀表板（`--stop` 後再啟動）。
 
 ### Codex 桌面版
@@ -234,6 +237,7 @@ plugins/token-usage/
 ├── scripts/diagnose.js          # 診斷：找出所有紀錄資料夾與來源
 ├── prices.json                  # 官方價格表（使用者每天從 GitHub 下載這個檔案）
 ├── server.js, pricing.js        # 伺服器、價格合併與比對
+├── logfile.js                   # 讀取紀錄檔（.jsonl 與壓縮的 .jsonl.zst）
 └── public/                      # 儀表板網頁
 tests/                           # 自動化測試
 .github/                         # issue 範本、CI

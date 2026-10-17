@@ -7,6 +7,7 @@ const http = require('http');
 const os = require('os');
 const { execFile } = require('child_process');
 const https = require('https');
+const { listLogFiles, readLog, baseName } = require('./logfile');
 const { REMOTE_URL, TOOLS, loadBundled, validatePriceFile, validatePrice, effectivePrices, matchModel } = require('./pricing');
 
 const PUBLIC = path.join(__dirname, 'public');
@@ -79,16 +80,9 @@ function classifyTool(name) {
 // ---------- 解析 ----------
 const fileCache = new Map(); // path -> { mtimeMs, size, calls, titles }
 
-function listJsonl(dir, out = []) {
-  let entries;
-  try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return out; }
-  for (const e of entries) {
-    const p = path.join(dir, e.name);
-    if (e.isDirectory()) listJsonl(p, out);
-    else if (e.name.endsWith('.jsonl')) out.push(p);
-  }
-  return out;
-}
+// 紀錄檔：.jsonl 與 Codex 壓縮過的 .jsonl.zst
+const listJsonl = listLogFiles;
+let warnedNoZstd = false;
 
 function promptText(msg) {
   const c = msg && msg.content;
@@ -114,7 +108,7 @@ function parseFile(file) {
   const calls = new Map(); // messageId -> call
   const titles = {};
   let lastPrompt = '';
-  const raw = fs.readFileSync(file, 'utf8');
+  const raw = readLog(file);
   for (const line of raw.split('\n')) {
     if (!line) continue;
     let o;
@@ -140,7 +134,7 @@ function parseFile(file) {
         c = {
           key,
           ts: Date.parse(o.timestamp) || 0,
-          session: o.sessionId || path.basename(file, '.jsonl'),
+          session: o.sessionId || baseName(file),
           cwd: o.cwd || '',
           model: m.model || 'unknown',
           ...usage,
@@ -184,8 +178,8 @@ function migrateKey(c) {
 
 function parseCodexFile(file) {
   const calls = [];
-  let session = path.basename(file, '.jsonl'), cwd = '', model = 'unknown', prompt = '', lastTotal = -1, tools = [], limits = null, sawMeta = false;
-  const raw = fs.readFileSync(file, 'utf8');
+  let session = baseName(file), cwd = '', model = 'unknown', prompt = '', lastTotal = -1, tools = [], limits = null, sawMeta = false;
+  const raw = readLog(file);
   for (const line of raw.split('\n')) {
     if (!line) continue;
     let o;
@@ -448,7 +442,12 @@ function buildDataset() {
       }
       Object.assign(archiveTitles, parsed.titles);
       changed = true; archiveDirty = true;
-    } catch (e) { console.error('解析失敗', f, e.message); }
+    } catch (e) {
+      if (e.code !== 'NO_ZSTD') { console.error('解析失敗', f, e.message); continue; }
+      // 沒辦法解壓 .zst：記下來不再重試，只提醒一次
+      fileCache.set(f, { mtimeMs: st.mtimeMs, size: st.size, limits: null });
+      if (!warnedNoZstd) { warnedNoZstd = true; console.error(`略過 Codex 壓縮紀錄（.jsonl.zst）：${e.message}`); }
+    }
   }
   // 本機紀錄被 Claude Code 清掉時只移除快取，歷史仍保留在 archive
   for (const f of [...fileCache.keys()]) if (!seen.has(f)) fileCache.delete(f);

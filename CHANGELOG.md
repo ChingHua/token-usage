@@ -1,5 +1,10 @@
 # 版本紀錄
 
+## 未發佈
+
+- Codex 壓縮過的歷史紀錄（`~/.codex/sessions`、`archived_sessions` 裡的 `.jsonl.zst`）也會統計。解壓需要 Node.js 22.15 以上或系統的 `zstd` 指令；都沒有時略過壓縮檔並提醒一次。和未壓縮檔重複的呼叫照既有機制只算一次。
+- 診斷工具會列出壓縮檔數量，並依 session_meta 來源分組；無法解壓時會提示。
+
 ## 0.6.5（2026-10-17）
 
 - 新增自動化測試（`npm test`，使用假資料），並在 GitHub Actions 上於 Windows、macOS、Linux 自動執行。

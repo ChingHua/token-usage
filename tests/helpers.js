@@ -20,6 +20,19 @@ function writeJsonl(file, records) {
   fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.writeFileSync(file, records.map(r => JSON.stringify(r)).join('\n') + '\n');
 }
+// 寫出 zstd 壓縮的 .jsonl.zst（模擬 Codex 壓縮過的舊紀錄）；這台電腦沒辦法壓縮時回傳 false，測試會略過
+function writeJsonlZst(file, records) {
+  const zlib = require('zlib');
+  const data = Buffer.from(records.map(r => JSON.stringify(r)).join('\n') + '\n');
+  let out = null;
+  if (typeof zlib.zstdCompressSync === 'function') out = zlib.zstdCompressSync(data);
+  else {
+    try { out = require('child_process').execFileSync('zstd', ['-cq'], { input: data, stdio: ['pipe', 'pipe', 'ignore'] }); } catch { return false; }
+  }
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, out);
+  return true;
+}
 function freePort() {
   return new Promise((resolve, reject) => {
     const s = net.createServer();
@@ -91,6 +104,7 @@ function writeCodexFixture(codexDir) {
     tc(14, 3000, 1800, 1000, 200),
   ];
   writeJsonl(path.join(codexDir, 'sessions', '2026', '10', '01', 'rollout-a.jsonl'), common);
+  writeCodexFixture.records = { meta, tc, common };
   // 分支出來的 session：複製父 session 的事件（時間與累計值相同，只算一次），之後再多一次呼叫
   writeJsonl(path.join(codexDir, 'sessions', '2026', '10', '01', 'rollout-b.jsonl'), [
     meta('codex-B', 15), ...common.slice(1), tc(16, 3500, 450, 0, 50),
@@ -170,4 +184,4 @@ function rowsOf(data) {
   }));
 }
 
-module.exports = { PLUGIN, tmpDir, rm, writeJsonl, freePort, writeClaudeFixture, writeCodexFixture, TEST_PRICES, EXPECTED, startServer, request, rowsOf, T0 };
+module.exports = { PLUGIN, tmpDir, rm, writeJsonl, writeJsonlZst, freePort, writeClaudeFixture, writeCodexFixture, TEST_PRICES, EXPECTED, startServer, request, rowsOf, T0 };

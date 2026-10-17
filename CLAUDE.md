@@ -14,6 +14,7 @@ plugins/token-usage/          plugin 本體（兩種工具共用同一個資料�
   .claude-plugin/plugin.json  Claude Code 設定
   .codex-plugin/plugin.json   Codex 設定
   server.js                   伺服器：解析紀錄、去重、算花費、同步、通知、HTTP API
+  logfile.js                  讀取紀錄檔（.jsonl 與 Codex 壓縮的 .jsonl.zst）
   pricing.js                  價格驗證、三層合併（官方 < AI 更新 < 自訂）、模型比對
   prices.json                 官方價格表（使用者每天從 GitHub main 下載這個檔案）
   scripts/start.js            啟動 / 停止 / 狀態 / 網址
