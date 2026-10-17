@@ -2,10 +2,10 @@
 // ---------- 狀態 ----------
 const S = {
   data: null, etag: null, config: null,
-  range: '7d', metric: 'tokens', project: '', model: '', source: '', device: '',
+  range: '7d', metric: 'tokens', project: '', model: '', source: '', device: '', app: '',
   tab: 'overview', session: null, sessSort: { key: 'last', dir: -1 },
 };
-const R = { ts: 0, session: 1, project: 2, model: 3, input: 4, output: 5, cw: 6, cr: 7, cost: 8, scen: 9, sub: 10, prompt: 11, thinking: 12, tools: 13, device: 14 };
+const R = { ts: 0, session: 1, project: 2, model: 3, input: 4, output: 5, cw: 6, cr: 7, cost: 8, scen: 9, sub: 10, prompt: 11, thinking: 12, tools: 13, device: 14, app: 15 };
 const TYPES = [
   { key: 'input', idx: R.input, label: '輸入', slot: 1 },
   { key: 'output', idx: R.output, label: '輸出', slot: 2 },
@@ -41,7 +41,8 @@ function dimFilter(r) {
   return (S.project === '' || r[R.project] === +S.project) &&
     (S.model === '' || r[R.model] === +S.model) &&
     (S.source === '' || r[R.sub] === +S.source) &&
-    (S.device === '' || r[R.device] === +S.device);
+    (S.device === '' || r[R.device] === +S.device) &&
+    (S.app === '' || r[R.app] === +S.app);
 }
 function filtered() {
   const t0 = rangeStart();
@@ -135,6 +136,7 @@ function renderOverview(rows) {
     kpi('今日花費', fmtUSD(todayCost), th.dailyCost ? `門檻 ${fmtUSD(th.dailyCost)}` : '未設門檻', th.dailyCost ? todayCost / th.dailyCost : null),
     kpi('近 5 小時 token', fmtTok(winTok), th.window5hTokens ? `門檻 ${fmtTok(th.window5hTokens)}` : '未設門檻', th.window5hTokens ? winTok / th.window5hTokens : null),
     kpi('快取命中率', (hit * 100).toFixed(1) + '%', '快取讀取 ÷ 全部輸入端 token'),
+    ...codexQuotaKpis(kpi),
   ].join('');
 
   // 時間軸：依 token 類型堆疊
@@ -215,6 +217,18 @@ function renderDeviceChart(rows) {
 }
 const deviceLabel = d => d.name + (d.local ? '（本機）' : '');
 
+// Codex 紀錄裡附帶方案額度使用率（5 小時 / 每週）
+function codexQuotaKpis(kpi) {
+  const L = S.data.limits && S.data.limits.codex;
+  if (!L || S.app === '0') return [];
+  const asOf = `截至 ${fmtTime(L.ts)}`;
+  const stale = Date.now() - L.ts > 864e5 ? '（資料較舊）' : '';
+  const win = w => w.window_minutes >= 1440 ? `每 ${Math.round(w.window_minutes / 1440)} 天` : `每 ${Math.round(w.window_minutes / 60)} 小時`;
+  const out = [kpi(`Codex 額度（${win(L.primary)}）`, L.primary.used_percent + '%', asOf + stale, L.primary.used_percent / 100)];
+  if (L.secondary) out.push(kpi(`Codex 額度（${win(L.secondary)}）`, L.secondary.used_percent + '%', asOf + stale, L.secondary.used_percent / 100));
+  return out;
+}
+
 function renderHeatmap(rows) {
   const grid = Array.from({ length: 7 }, () => Array(24).fill(0));
   rows.forEach(r => { const d = new Date(r[R.ts]); grid[d.getDay()][d.getHours()] += val(r); });
@@ -274,7 +288,7 @@ function renderScenario(rows) {
   });
   const tl = Object.entries(tools).sort((a, b) => (S.metric === 'cost' ? b[1].cost - a[1].cost : b[1].tok - a[1].tok)).slice(0, 20);
   $('#toolTable').innerHTML = `<thead><tr><th>工具</th><th class="num">使用次數</th><th class="num">Token</th><th class="num">花費</th></tr></thead><tbody>` +
-    tl.map(([n, t]) => `<tr><td>${esc(n.startsWith('mcp__') ? n.slice(n.lastIndexOf('__') + 2) + '（MCP）' : n)}</td><td class="num">${t.calls.toLocaleString()}</td><td class="num">${fmtTok(t.tok)}</td><td class="num">${fmtUSD(t.cost)}</td></tr>`).join('') + '</tbody>';
+    tl.map(([n, t]) => `<tr><td>${esc(toolLabel(n))}</td><td class="num">${t.calls.toLocaleString()}</td><td class="num">${fmtTok(t.tok)}</td><td class="num">${fmtUSD(t.cost)}</td></tr>`).join('') + '</tbody>';
 
   // 最耗用的提問
   const pm = new Map();
@@ -289,6 +303,10 @@ function renderScenario(rows) {
 }
 
 // ---------- Sessions ----------
+function toolLabel(n) {
+  if (n.startsWith('mcp__')) return n.slice(n.lastIndexOf('__') + 2) + '（MCP）';
+  return n.replace(/:read$/, '（讀取）').replace(/:write$/, '（寫入）');
+}
 function sessTitle(si) {
   const s = S.data.sessions[si];
   return s.title || (S.data.prompts.length && '') || s.id.slice(0, 8);
@@ -297,7 +315,7 @@ function sessionStats(rows) {
   const m = new Map();
   rows.forEach(r => {
     const si = r[R.session];
-    const s = m.get(si) || { si, first: r[R.ts], last: 0, calls: 0, tok: 0, cost: 0, maxCtx: 0, firstPrompt: r[R.prompt] };
+    const s = m.get(si) || { si, app: r[R.app], first: r[R.ts], last: 0, calls: 0, tok: 0, cost: 0, maxCtx: 0, firstPrompt: r[R.prompt] };
     s.last = Math.max(s.last, r[R.ts]); s.calls++; s.tok += tokOf(r); s.cost += r[R.cost];
     if (!r[R.sub]) s.maxCtx = Math.max(s.maxCtx, r[R.input] + r[R.cw] + r[R.cr]);
     m.set(si, s);
@@ -310,14 +328,15 @@ function renderSessions(rows) {
     ...s, title: S.data.sessions[s.si].title || S.data.prompts[s.firstPrompt] || S.data.sessions[s.si].id.slice(0, 8),
     project: S.data.projects[S.data.sessions[s.si].project],
     device: S.data.devices[S.data.sessions[s.si].device]?.name || '',
+    app: S.data.apps[s.app] || '',
   })).filter(s => !q || s.title.toLowerCase().includes(q) || s.project.toLowerCase().includes(q));
   const { key, dir } = S.sessSort;
   list.sort((a, b) => (typeof a[key] === 'string' ? a[key].localeCompare(b[key]) : a[key] - b[key]) * dir);
-  const cols = [['title', '標題'], ['project', '專案'], ['device', '裝置'], ['first', '開始'], ['last', '最後活動'], ['calls', '呼叫', 1], ['tok', 'Token', 1], ['cost', '花費', 1], ['maxCtx', '最大上下文', 1]];
+  const cols = [['title', '標題'], ['app', '工具'], ['project', '專案'], ['device', '裝置'], ['first', '開始'], ['last', '最後活動'], ['calls', '呼叫', 1], ['tok', 'Token', 1], ['cost', '花費', 1], ['maxCtx', '最大上下文', 1]];
   const ctxLimit = S.config ? S.config.thresholds.contextTokens : 0;
   $('#sessTable').innerHTML = `<thead><tr>${cols.map(([k, l, n]) => `<th data-k="${k}" class="${n ? 'num' : ''}">${l}${k === key ? (dir > 0 ? ' ▲' : ' ▼') : ''}</th>`).join('')}</tr></thead><tbody>` +
     list.map(s => `<tr data-si="${s.si}" class="${s.si === S.session ? 'sel' : ''}">
-      <td class="wrap">${esc(s.title.slice(0, 80))}</td><td>${esc(s.project)}</td><td>${esc(s.device)}</td><td>${fmtTime(s.first)}</td><td>${fmtTime(s.last)}</td>
+      <td class="wrap">${esc(s.title.slice(0, 80))}</td><td>${esc(s.app)}</td><td>${esc(s.project)}</td><td>${esc(s.device)}</td><td>${fmtTime(s.first)}</td><td>${fmtTime(s.last)}</td>
       <td class="num">${s.calls}</td><td class="num">${fmtTok(s.tok)}</td><td class="num">${fmtUSD(s.cost)}</td>
       <td class="num">${ctxLimit && s.maxCtx >= ctxLimit ? '⚠ ' : ''}${fmtTok(s.maxCtx)}</td></tr>`).join('') + '</tbody>';
   if (S.session != null) renderSessionDetail();
@@ -444,6 +463,7 @@ async function load() {
       fillSelect('#fProject', S.data.projects, S.project);
       fillSelect('#fModel', S.data.models, S.model);
       fillSelect('#fDevice', S.data.devices.map(deviceLabel), S.device);
+      fillSelect('#fApp', S.data.apps, S.app);
       renderDevices();
       render();
     }
@@ -463,7 +483,7 @@ function bindSeg(id, key) {
 }
 bindSeg('#range', 'range');
 bindSeg('#metric', 'metric');
-[['#fProject', 'project'], ['#fModel', 'model'], ['#fSource', 'source'], ['#fDevice', 'device']].forEach(([id, k]) => $(id).addEventListener('change', e => { S[k] = e.target.value; render(); }));
+[['#fProject', 'project'], ['#fModel', 'model'], ['#fSource', 'source'], ['#fDevice', 'device'], ['#fApp', 'app']].forEach(([id, k]) => $(id).addEventListener('change', e => { S[k] = e.target.value; render(); }));
 document.querySelector('.tabs').addEventListener('click', e => {
   const b = e.target.closest('.tab'); if (!b) return;
   S.tab = b.dataset.tab;

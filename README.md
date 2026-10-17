@@ -1,6 +1,6 @@
 # Claude Token 用量儀表板（Claude Code plugin）
 
-讀取本機 Claude Code 對話紀錄（`~/.claude/projects/**/*.jsonl`），統計每次 API 呼叫的 token 用量，用網頁儀表板呈現，並在超過門檻時通知。
+讀取本機 Claude Code 對話紀錄（`~/.claude/projects/**/*.jsonl`）與 OpenAI Codex 對話紀錄（`~/.codex/sessions`），統計每次 API 呼叫的 token 用量，用網頁儀表板呈現，並在超過門檻時通知。
 
 預設只統計**這台電腦**的 Claude Code 用量；啟用「多裝置同步」後可以合計自己多台電腦的用量。claude.ai 網頁版與手機 App 的用量不在內。
 
@@ -38,6 +38,17 @@
 - **情境分析**：依每次呼叫使用的工具分成 8 種情境（讀取/搜尋、編輯檔案、執行指令、網頁/瀏覽器、子代理派工、規劃/流程、MCP 工具、文字回覆），附工具排行與最耗用的提問
 - **Sessions**：每個 session 的 token、花費、最大上下文；點選可看上下文成長、累積花費、每次提問的消耗
 - **通知與設定**：門檻超過時跳出 Windows 系統通知、瀏覽器通知與頁面橫幅
+
+## 支援的 AI 工具
+
+| 工具 | 讀取位置 | 備註 |
+|---|---|---|
+| Claude Code | `~/.claude/projects`（或 `CLAUDE_CONFIG_DIR`） | 含桌面 App 的 Code 分頁與子代理 |
+| OpenAI Codex | `~/.codex/sessions`、`archived_sessions`（或 `CODEX_HOME`） | 另外顯示 Codex 方案的 5 小時 / 每週額度使用率 |
+
+上方「工具」篩選可以只看其中一種。Codex 的 `input_tokens` 已包含快取 token，這裡會拆開成「輸入」與「快取讀取」，和 Claude 的欄位一致。Codex 在 Windows 上多數動作都透過 `shell_command`，「情境分析」會依指令內容（例如 `rg`、`Get-Content`）歸到讀取/搜尋或編輯檔案。
+
+Codex 模型預設用 `pricing.gpt` 的單價估算，請依實際價格調整。
 
 ## 多裝置同步（OneDrive）
 

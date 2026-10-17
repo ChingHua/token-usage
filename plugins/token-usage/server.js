@@ -17,6 +17,7 @@ const ALERT_STATE_PATH = path.join(DATA_DIR, 'alerts-state.json');
 const DEFAULT_CONFIG = {
   port: 8787,
   projectsDir: path.join(process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude'), 'projects'),
+  codexDir: process.env.CODEX_HOME || path.join(os.homedir(), '.codex'), // OpenAI Codex 的資料夾（讀 sessions 與 archived_sessions）
   refreshSeconds: 30,
   windowsToast: true,
   syncDir: '',            // 多裝置同步資料夾（例如 OneDrive 內的資料夾），空白代表不同步
@@ -27,6 +28,7 @@ const DEFAULT_CONFIG = {
     fable: { input: 5, output: 25 },
     sonnet: { input: 3, output: 15 },
     haiku: { input: 1, output: 5 },
+    gpt: { input: 1.25, output: 10 }, // Codex（OpenAI）模型，請依實際價格調整
     default: { input: 3, output: 15 },
   },
   cacheMultipliers: { write5m: 1.25, write1h: 2, read: 0.1 },
@@ -57,6 +59,15 @@ let config = loadConfig();
 const SCENARIOS = ['讀取/搜尋', '編輯檔案', '執行指令', '網頁/瀏覽器', '子代理派工', '規劃/流程', 'MCP 工具', '文字回覆'];
 function classifyTool(name) {
   if (/^(Read|Glob|Grep|LS|NotebookRead)$/.test(name)) return 0;
+  // Codex 工具名稱（shell 指令依內容加上 :read / :write）
+  if (/:read$/.test(name)) return 0;
+  if (/:write$/.test(name)) return 1;
+  if (/^(read_file|list_dir|grep_files|view_image)$/.test(name)) return 0;
+  if (/^apply_patch$/.test(name)) return 1;
+  if (/^(shell|shell_command|local_shell|exec_command|unified_exec|write_stdin)$/.test(name)) return 2;
+  if (/^(web_search|web_search_call)$/.test(name)) return 3;
+  if (/^(spawn_agent|send_input|wait|close_agent)$/.test(name)) return 4;
+  if (/^(update_plan|request_user_input)$/.test(name)) return 5;
   if (/^(Edit|Write|MultiEdit|NotebookEdit)$/.test(name)) return 1;
   if (/^(Bash|PowerShell|Monitor|BashOutput|KillShell|TaskStop)$/.test(name)) return 2;
   if (/^(WebFetch|WebSearch)$/.test(name) || /Browser|chrome/i.test(name)) return 3;
@@ -141,6 +152,59 @@ function parseFile(file) {
   return { calls: [...calls.values()].filter(c => c.model !== '<synthetic>'), titles };
 }
 
+// Codex：每個 token_count 事件的 last_token_usage 就是一次 API 呼叫。
+// OpenAI 的 input_tokens 已包含 cached_input_tokens，output_tokens 已包含 reasoning_output_tokens。
+// Codex 在 Windows 上幾乎所有動作都透過 shell_command，所以依指令內容細分讀取 / 寫入。
+const SHELL_TOOLS = /^(shell|shell_command|local_shell|exec_command|unified_exec)$/;
+const READ_CMD = /^(rg|grep|findstr|Get-Content|gc|cat|type|Select-String|sls|Get-ChildItem|gci|ls|dir|Get-Item|Test-Path|head|tail|sed\s+-n|wc|Format-Hex|git\s+(log|show|diff|status|blame))\b/i;
+const WRITE_CMD = /^(Set-Content|Add-Content|Out-File|New-Item|Remove-Item|Move-Item|Copy-Item|Rename-Item|mkdir|rm|mv|cp|tee)\b/i;
+function codexToolName(p) {
+  const name = p.name || p.type;
+  if (!SHELL_TOOLS.test(name)) return name;
+  let cmd = '';
+  try { const a = JSON.parse(p.arguments || '{}'); cmd = Array.isArray(a.command) ? a.command.join(' ') : String(a.command || a.cmd || ''); } catch { return name; }
+  cmd = cmd.replace(/^(powershell(\.exe)?|pwsh|bash|cmd(\.exe)?)\s+((-|\/)\w+\s+)*/i, '').replace(/^["']/, '').trim();
+  return READ_CMD.test(cmd) ? name + ':read' : WRITE_CMD.test(cmd) ? name + ':write' : name;
+}
+
+function parseCodexFile(file) {
+  const calls = [];
+  let session = path.basename(file, '.jsonl'), cwd = '', model = 'unknown', prompt = '', lastTotal = -1, tools = [], limits = null;
+  const raw = fs.readFileSync(file, 'utf8');
+  for (const line of raw.split('\n')) {
+    if (!line) continue;
+    let o;
+    try { o = JSON.parse(line); } catch { continue; }
+    const p = o.payload || {};
+    if (o.type === 'session_meta') { session = p.id || session; cwd = p.cwd || cwd; }
+    else if (o.type === 'turn_context') { model = p.model || model; cwd = p.cwd || cwd; }
+    else if (o.type === 'response_item' && (p.type === 'function_call' || p.type === 'custom_tool_call' || p.type === 'local_shell_call' || p.type === 'web_search_call')) {
+      tools.push(codexToolName(p));
+    } else if (o.type === 'event_msg' && p.type === 'user_message') {
+      const t = String(p.message || '').trim();
+      if (t) prompt = t.slice(0, 160);
+    } else if (o.type === 'event_msg' && p.type === 'token_count') {
+      if (p.rate_limits && p.rate_limits.primary) limits = { ts: Date.parse(o.timestamp) || 0, primary: p.rate_limits.primary, secondary: p.rate_limits.secondary, plan: p.rate_limits.plan_type };
+      const info = p.info;
+      if (!info || !info.last_token_usage) continue;
+      const total = info.total_token_usage ? info.total_token_usage.total_tokens : -1;
+      if (total === lastTotal) continue; // 重複的事件
+      lastTotal = total;
+      const u = info.last_token_usage;
+      const cached = u.cached_input_tokens || 0;
+      calls.push({
+        key: `codex|${session}|${total}`, app: 'codex',
+        ts: Date.parse(o.timestamp) || 0, session, cwd, model,
+        input: Math.max(0, (u.input_tokens || 0) - cached), output: u.output_tokens || 0,
+        cacheWrite: 0, cacheWrite1h: 0, cacheRead: cached, thinking: u.reasoning_output_tokens || 0,
+        tools, sub: false, prompt,
+      });
+      tools = [];
+    }
+  }
+  return { calls, titles: {}, limits };
+}
+
 function priceFor(model) {
   for (const [k, v] of Object.entries(config.pricing)) if (k !== 'default' && model.includes(k)) return v;
   return config.pricing.default;
@@ -164,6 +228,9 @@ if (!deviceId) {
   fs.writeFileSync(DEVICE_ID_PATH, deviceId);
 }
 const FILE_VERSION = 1;
+const APPS = ['claude', 'codex'];
+const APP_LABELS = ['Claude Code', 'Codex'];
+let codexLimits = null;
 const deviceName = () => config.deviceName || os.hostname();
 
 function detectOneDrive() {
@@ -178,7 +245,7 @@ const indexer = () => { const m = new Map(), arr = []; return { arr, get(k) { if
 function encodeDevice(calls, titles) {
   const sessions = indexer(), cwds = indexer(), models = indexer(), prompts = indexer();
   const rows = calls.map(c => [c.key, c.ts, sessions.get(c.session), cwds.get(c.cwd), models.get(c.model),
-    c.input, c.output, c.cacheWrite, c.cacheWrite1h, c.cacheRead, c.thinking, c.tools.join(','), c.sub ? 1 : 0, prompts.get(c.prompt || '')]);
+    c.input, c.output, c.cacheWrite, c.cacheWrite1h, c.cacheRead, c.thinking, c.tools.join(','), c.sub ? 1 : 0, prompts.get(c.prompt || ''), APPS.indexOf(c.app || 'claude')]);
   const t = {};
   for (const s of sessions.arr) if (titles[s]) t[s] = titles[s];
   return { version: FILE_VERSION, device: { id: deviceId, name: deviceName() }, updatedAt: Date.now(),
@@ -188,7 +255,7 @@ function decodeDevice(d) {
   const calls = d.rows.map(r => ({
     key: r[0], ts: r[1], session: d.sessions[r[2]], cwd: d.cwds[r[3]], model: d.models[r[4]],
     input: r[5], output: r[6], cacheWrite: r[7], cacheWrite1h: r[8], cacheRead: r[9], thinking: r[10],
-    tools: r[11] ? r[11].split(',') : [], sub: !!r[12], prompt: d.prompts[r[13]],
+    tools: r[11] ? r[11].split(',') : [], sub: !!r[12], prompt: d.prompts[r[13]], app: APPS[r[14] || 0],
   }));
   return { device: d.device, updatedAt: d.updatedAt, calls, titles: d.titles || {} };
 }
@@ -256,7 +323,9 @@ function readRemoteDevices() {
 let dataset = null, datasetStamp = '';
 function buildDataset() {
   loadArchive();
-  const files = listJsonl(config.projectsDir);
+  const codexFiles = config.codexDir ? [...listJsonl(path.join(config.codexDir, 'sessions')), ...listJsonl(path.join(config.codexDir, 'archived_sessions'))] : [];
+  const codexSet = new Set(codexFiles);
+  const files = [...listJsonl(config.projectsDir), ...codexFiles];
   let changed = !dataset;
   const seen = new Set(files);
   for (const f of files) {
@@ -265,8 +334,8 @@ function buildDataset() {
     const cached = fileCache.get(f);
     if (cached && cached.mtimeMs === st.mtimeMs && cached.size === st.size) continue;
     try {
-      const parsed = parseFile(f);
-      fileCache.set(f, { mtimeMs: st.mtimeMs, size: st.size });
+      const parsed = codexSet.has(f) ? parseCodexFile(f) : parseFile(f);
+      fileCache.set(f, { mtimeMs: st.mtimeMs, size: st.size, limits: parsed.limits });
       for (const c of parsed.calls) archive.set(c.key, c);
       Object.assign(archiveTitles, parsed.titles);
       changed = true; archiveDirty = true;
@@ -274,6 +343,8 @@ function buildDataset() {
   }
   // 本機紀錄被 Claude Code 清掉時只移除快取，歷史仍保留在 archive
   for (const f of [...fileCache.keys()]) if (!seen.has(f)) fileCache.delete(f);
+  codexLimits = null;
+  for (const v of fileCache.values()) if (v.limits && (!codexLimits || v.limits.ts > codexLimits.ts)) codexLimits = v.limits;
   flushArchive();
   const remote = readRemoteDevices();
   if (!changed && !remote.changed && dataset) return dataset;
@@ -296,7 +367,7 @@ function buildDataset() {
     if (!sessionInfo[si]) sessionInfo[si] = { id: c.session, title: titles[c.session] || '', project: pi, cwd: cwd0, device: di };
     const scen = c.tools.length ? classifyTool(c.tools[0]) : 7;
     return [c.ts, si, pi, models.get(c.model), c.input, c.output, c.cacheWrite, c.cacheRead,
-      +costOf(c).toFixed(6), scen, c.sub ? 1 : 0, prompts.get(c.prompt || ''), c.thinking, c.tools.join(','), di];
+      +costOf(c).toFixed(6), scen, c.sub ? 1 : 0, prompts.get(c.prompt || ''), c.thinking, c.tools.join(','), di, Math.max(0, APPS.indexOf(c.app || 'claude'))];
   });
   dataset = {
     generatedAt: Date.now(),
@@ -304,7 +375,9 @@ function buildDataset() {
     devices: devices.map(d => ({ id: d.device.id, name: d.device.name, updatedAt: d.updatedAt, local: !!d.local, calls: d.calls.length })),
     sessions: sessions.arr.map((id, i) => sessionInfo[i]),
     projects: projects.arr, models: models.arr, prompts: prompts.arr,
-    fields: ['ts', 'session', 'project', 'model', 'input', 'output', 'cacheWrite', 'cacheRead', 'cost', 'scenario', 'sub', 'prompt', 'thinking', 'tools', 'device'],
+    fields: ['ts', 'session', 'project', 'model', 'input', 'output', 'cacheWrite', 'cacheRead', 'cost', 'scenario', 'sub', 'prompt', 'thinking', 'tools', 'device', 'app'],
+    apps: APP_LABELS,
+    limits: { codex: codexLimits },
     rows,
   };
   datasetStamp = String(dataset.generatedAt);
